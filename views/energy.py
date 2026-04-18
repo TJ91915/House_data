@@ -112,6 +112,52 @@ def chart_time_of_day(df: pd.DataFrame) -> go.Figure:
     return style(fig)
 
 
+def chart_weekday_sum(df: pd.DataFrame) -> go.Figure:
+    dow_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    grp = (
+        df.groupby("weekday")["kwh"].sum()
+        .reindex(range(7))
+        .reset_index()
+    )
+    grp["label"] = grp["weekday"].map(lambda i: dow_labels[i])
+    fig = go.Figure(go.Bar(
+        x=grp["label"], y=grp["kwh"],
+        marker=dict(color=C_KWH),
+        hovertemplate="%{x}<br>%{y:,.1f} kWh<extra></extra>",
+    ))
+    fig.update_layout(
+        title="Total kWh by day of week",
+        yaxis=dict(title="kWh", rangemode="tozero"),
+        xaxis=dict(title=""),
+        height=340,
+        margin=dict(l=40, r=40, t=60, b=40),
+    )
+    return style(fig)
+
+
+def chart_hour_sum(df: pd.DataFrame) -> go.Figure:
+    hours = df["start"].dt.hour
+    grp = (
+        df.assign(hour=hours).groupby("hour")["kwh"].sum()
+        .reindex(range(24))
+        .reset_index()
+    )
+    grp["label"] = grp["hour"].map(lambda h: f"{h:02d}:00-{(h + 1) % 24:02d}:00")
+    fig = go.Figure(go.Bar(
+        x=grp["label"], y=grp["kwh"],
+        marker=dict(color=C_KWH),
+        hovertemplate="%{x}<br>%{y:,.1f} kWh<extra></extra>",
+    ))
+    fig.update_layout(
+        title="Total kWh by hour of day",
+        yaxis=dict(title="kWh", rangemode="tozero"),
+        xaxis=dict(title="", tickangle=-45),
+        height=340,
+        margin=dict(l=40, r=40, t=60, b=80),
+    )
+    return style(fig)
+
+
 # ---------- page ----------
 st.title("⚡ Energy")
 
@@ -165,3 +211,9 @@ with col_a:
     st.plotly_chart(chart_calendar_heatmap(daily_w), use_container_width=True)
 with col_b:
     st.plotly_chart(chart_time_of_day(dfw), use_container_width=True)
+
+col_c, col_d = st.columns([1, 1])
+with col_c:
+    st.plotly_chart(chart_weekday_sum(dfw), use_container_width=True)
+with col_d:
+    st.plotly_chart(chart_hour_sum(dfw), use_container_width=True)
