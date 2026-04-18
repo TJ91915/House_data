@@ -103,14 +103,13 @@ with st.sidebar:
 
     min_d = df["ts"].min().date()
     max_d = df["ts"].max().date()
-    default_start = max(min_d, max_d - timedelta(days=30))
     dr = st.date_input(
         "Date range",
-        value=(default_start, max_d),
+        value=(min_d, max_d),  # default: all data
         min_value=min_d, max_value=max_d,
         key="temp_date_range",
     )
-    start_d, end_d = dr if isinstance(dr, tuple) and len(dr) == 2 else (default_start, max_d)
+    start_d, end_d = dr if isinstance(dr, tuple) and len(dr) == 2 else (min_d, max_d)
 
     st.caption(f"Data: {min_d} → {max_d}  ·  {len(df):,} readings")
 

@@ -127,14 +127,13 @@ with st.sidebar:
 
     min_d = df["start"].min().date()
     max_d = df["start"].max().date()
-    default_start = max(min_d, max_d - timedelta(days=90))
     dr = st.date_input(
         "Date range",
-        value=(default_start, max_d),
+        value=(min_d, max_d),  # default: all data
         min_value=min_d, max_value=max_d,
         key="energy_date_range",
     )
-    start_d, end_d = dr if isinstance(dr, tuple) and len(dr) == 2 else (default_start, max_d)
+    start_d, end_d = dr if isinstance(dr, tuple) and len(dr) == 2 else (min_d, max_d)
 
     freq_label = st.radio("Aggregation", ["Daily", "Weekly", "Monthly"],
                           horizontal=True, key="energy_freq")
