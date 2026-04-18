@@ -14,6 +14,7 @@ CACHE_TTL = 7200  # 2 hours
 # Sheet IDs
 SHEET_ID_ENERGY = "1stKNr_MzA3fJL3kKSofMqxK4Nu66XbVtqsLzyosKqpQ"
 SHEET_ID_TEMP   = "1ZOiXI_23xaTC7QAT6Z_l7v6H9KefbzTqM0UI5c7bDB0"
+SHEET_ID_MOTION = "1rL54qg6g1eOxGZTWWkflqRFpE7QbFF11TUXyUhh6ov4"
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 LOCAL_KEY = Path(__file__).parent / "service-account-key.json"
@@ -109,6 +110,30 @@ def load_temperature() -> pd.DataFrame:
     df["hour"] = df["ts"].dt.hour
     df["weekday"] = df["ts"].dt.weekday
     return df[["ts", "date", "hour", "weekday", "temp_c"]]
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner="Loading motion data…")
+def load_motion() -> pd.DataFrame:
+    """Union both motion-log tabs (old + new form), filter to Yes-only events."""
+    sh = client().open_by_key(SHEET_ID_MOTION)
+    frames = []
+    for tab in ("Old form", "New form"):
+        rows = sh.worksheet(tab).get_all_values()
+        if not rows:
+            continue
+        frames.append(pd.DataFrame(rows[1:], columns=rows[0]))
+    df = pd.concat(frames, ignore_index=True)
+    # Column has a trailing space in the sheet header; some values have trailing space too.
+    motion_col = next(c for c in df.columns if c.strip().lower().startswith("motion"))
+    df = df.rename(columns={motion_col: "motion", "Timestamp": "ts_raw"})
+    df["motion"] = df["motion"].str.strip().str.lower()
+    df = df[df["motion"] == "yes"].copy()
+    df["ts"] = pd.to_datetime(df["ts_raw"], format="%d/%m/%Y %H:%M:%S", errors="coerce")
+    df = df.dropna(subset=["ts"]).sort_values("ts").reset_index(drop=True)
+    df["date"] = df["ts"].dt.date
+    df["hour"] = df["ts"].dt.hour
+    df["weekday"] = df["ts"].dt.weekday
+    return df[["ts", "date", "hour", "weekday"]]
 
 
 def join_cost(energy: pd.DataFrame, tariffs: pd.DataFrame) -> pd.DataFrame:
