@@ -74,6 +74,51 @@ def chart_hour_heatmap(df: pd.DataFrame) -> go.Figure:
     return style(fig)
 
 
+def chart_weekday_bar(df: pd.DataFrame) -> go.Figure:
+    dow_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    grp = (
+        df.groupby("weekday")["temp_c"].mean()
+        .reindex(range(7))
+        .reset_index()
+    )
+    grp["label"] = grp["weekday"].map(lambda i: dow_labels[i])
+    fig = go.Figure(go.Bar(
+        x=grp["label"], y=grp["temp_c"],
+        marker=dict(color=C_TEMP_MEAN),
+        hovertemplate="%{x}<br>%{y:.2f} °C<extra></extra>",
+    ))
+    fig.update_layout(
+        title="Average °C by day of week",
+        yaxis=dict(title="°C", range=[19, 21], dtick=0.5),
+        xaxis=dict(title=""),
+        height=340,
+        margin=dict(l=40, r=40, t=60, b=40),
+    )
+    return style(fig)
+
+
+def chart_hour_bar(df: pd.DataFrame) -> go.Figure:
+    grp = (
+        df.groupby("hour")["temp_c"].mean()
+        .reindex(range(24))
+        .reset_index()
+    )
+    grp["label"] = grp["hour"].map(lambda h: f"{h:02d}:00-{(h + 1) % 24:02d}:00")
+    fig = go.Figure(go.Bar(
+        x=grp["label"], y=grp["temp_c"],
+        marker=dict(color=C_TEMP_MEAN),
+        hovertemplate="%{x}<br>%{y:.2f} °C<extra></extra>",
+    ))
+    fig.update_layout(
+        title="Average °C by hour of day",
+        yaxis=dict(title="°C", range=[19, 21], dtick=0.5),
+        xaxis=dict(title="", tickangle=-45),
+        height=340,
+        margin=dict(l=40, r=40, t=60, b=80),
+    )
+    return style(fig)
+
+
 def chart_raw(df: pd.DataFrame) -> go.Figure:
     fig = go.Figure(go.Scatter(
         x=df["ts"], y=df["temp_c"], mode="lines",
@@ -143,3 +188,9 @@ with col_a:
     st.plotly_chart(chart_hour_heatmap(dfw), use_container_width=True)
 with col_b:
     st.plotly_chart(chart_raw(dfw), use_container_width=True)
+
+col_c, col_d = st.columns([1, 1])
+with col_c:
+    st.plotly_chart(chart_weekday_bar(dfw), use_container_width=True)
+with col_d:
+    st.plotly_chart(chart_hour_bar(dfw), use_container_width=True)
