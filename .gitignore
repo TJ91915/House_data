@@ -1,0 +1,22 @@
+service-account-key.json
+.streamlit/secrets.toml
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# local diagnostic / one-off scripts (not part of the app)
+smoke_test.py
+explore_sheet.py
+inspect_formulas.py
+check_apr17.py
+diagnose_gaps.py
+dedupe_sheet.py
+
+# personal notes
+tasks/
+
+# tooling / IDE
+.claude/
+.vscode/
+.idea/

@@ -1,0 +1,8 @@
+[theme]
+# Warm, muted palette — cream background, sage accent, soft charcoal text.
+base = "light"
+primaryColor = "#7B9B7E"               # sage (buttons, sliders, active state)
+backgroundColor = "#F7F4EE"             # warm cream (main area)
+secondaryBackgroundColor = "#EEE9DF"    # sandstone (sidebar, metric cards)
+textColor = "#2F3640"                   # soft charcoal, not pure black
+font = "sans serif"
