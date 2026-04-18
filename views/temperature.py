@@ -8,26 +8,9 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from lib import (
-    SHEET_ID_TEMP,
     C_TEMP_MIN, C_TEMP_MEAN, C_TEMP_MAX, C_TEMP_RIBBON, HEAT_SCALE_TEMP,
-    client, style,
+    style, load_temperature,
 )
-
-
-# ---------- data ----------
-@st.cache_data(ttl=3600, show_spinner="Loading temperature data…")
-def load_temperature() -> pd.DataFrame:
-    ws = client().open_by_key(SHEET_ID_TEMP).worksheet("Temperature")
-    rows = ws.get_all_values()
-    df = pd.DataFrame(rows[1:], columns=rows[0])
-    df = df[["Timestamp", "Temp_c"]].copy()
-    df["ts"] = pd.to_datetime(df["Timestamp"], format="%d/%m/%Y %H:%M:%S", errors="coerce")
-    df["temp_c"] = pd.to_numeric(df["Temp_c"], errors="coerce")
-    df = df.dropna(subset=["ts", "temp_c"]).sort_values("ts").reset_index(drop=True)
-    df["date"] = df["ts"].dt.date
-    df["hour"] = df["ts"].dt.hour
-    df["weekday"] = df["ts"].dt.weekday
-    return df[["ts", "date", "hour", "weekday", "temp_c"]]
 
 
 def daily_stats(df: pd.DataFrame) -> pd.DataFrame:

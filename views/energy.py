@@ -10,55 +10,12 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from lib import (
-    SHEET_ID_ENERGY,
     C_ENERGY, C_STANDING, C_KWH, C_ROLLING, HEAT_SCALE,
-    client, style,
+    style, load_energy, load_tariffs, join_cost,
 )
 
 
-# ---------- data ----------
-@st.cache_data(ttl=3600, show_spinner="Loading energy data…")
-def load_energy() -> pd.DataFrame:
-    ws = client().open_by_key(SHEET_ID_ENERGY).worksheet("Energy_1")
-    rows = ws.get_all_values()
-    df = pd.DataFrame(rows[1:], columns=rows[0])
-    df = df[["Consumption (kwh)", "Start"]].copy()
-    df["start"] = pd.to_datetime(df["Start"], errors="coerce")
-    df["kwh"] = pd.to_numeric(df["Consumption (kwh)"], errors="coerce")
-    df = df.dropna(subset=["start", "kwh"]).sort_values("start").reset_index(drop=True)
-    df["date"] = df["start"].dt.date
-    df["hhmm"] = df["start"].dt.strftime("%H:%M")
-    df["weekday"] = df["start"].dt.weekday
-    return df[["start", "date", "hhmm", "weekday", "kwh"]]
-
-
-@st.cache_data(ttl=3600, show_spinner="Loading tariffs…")
-def load_tariffs() -> pd.DataFrame:
-    ws = client().open_by_key(SHEET_ID_ENERGY).worksheet("Tariffs")
-    rows = ws.get_all_values()
-    df = pd.DataFrame(rows[1:], columns=rows[0])
-    df = df[df["Valid From"].str.strip() != ""].copy()
-    df["valid_from"] = pd.to_datetime(df["Valid From"])
-    df["unit_rate_p"] = pd.to_numeric(df["Unit Rate (p/kWh inc VAT)"])
-    df["standing_p_day"] = pd.to_numeric(df["Standing Charge (p/day inc VAT)"])
-    return df[["valid_from", "unit_rate_p", "standing_p_day"]].sort_values("valid_from")
-
-
-def join_cost(energy: pd.DataFrame, tariffs: pd.DataFrame) -> pd.DataFrame:
-    out = pd.merge_asof(
-        energy.sort_values("start"),
-        tariffs.rename(columns={"valid_from": "start"}),
-        on="start",
-        direction="backward",
-    )
-    out["energy_cost_p"] = out["kwh"] * out["unit_rate_p"]
-    out["standing_p_slot"] = out["standing_p_day"] / 48
-    out["cost_gbp"] = (out["energy_cost_p"] + out["standing_p_slot"]) / 100
-    out["energy_gbp"] = out["energy_cost_p"] / 100
-    out["standing_gbp"] = out["standing_p_slot"] / 100
-    return out
-
-
+# ---------- page-specific helpers ----------
 def daily(df: pd.DataFrame) -> pd.DataFrame:
     g = df.groupby("date").agg(
         kwh=("kwh", "sum"),

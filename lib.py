@@ -1,12 +1,15 @@
-"""Shared helpers for the multi-page House dashboard: auth, palette, chart styling."""
+"""Shared helpers for the multi-page House dashboard: auth, palette, chart styling, loaders."""
 from __future__ import annotations
 
 from pathlib import Path
 
 import gspread
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from google.oauth2.service_account import Credentials
+
+CACHE_TTL = 7200  # 2 hours
 
 # Sheet IDs
 SHEET_ID_ENERGY = "1stKNr_MzA3fJL3kKSofMqxK4Nu66XbVtqsLzyosKqpQ"
@@ -63,3 +66,62 @@ def style(fig: go.Figure) -> go.Figure:
     fig.update_xaxes(gridcolor=C_GRID, linecolor=C_GRID, zerolinecolor=C_GRID)
     fig.update_yaxes(gridcolor=C_GRID, linecolor=C_GRID, zerolinecolor=C_GRID)
     return fig
+
+
+# ---------- data loaders (cached, shared across pages) ----------
+@st.cache_data(ttl=CACHE_TTL, show_spinner="Loading energy data…")
+def load_energy() -> pd.DataFrame:
+    ws = client().open_by_key(SHEET_ID_ENERGY).worksheet("Energy_1")
+    rows = ws.get_all_values()
+    df = pd.DataFrame(rows[1:], columns=rows[0])
+    df = df[["Consumption (kwh)", "Start"]].copy()
+    df["start"] = pd.to_datetime(df["Start"], errors="coerce")
+    df["kwh"] = pd.to_numeric(df["Consumption (kwh)"], errors="coerce")
+    df = df.dropna(subset=["start", "kwh"]).sort_values("start").reset_index(drop=True)
+    df["date"] = df["start"].dt.date
+    df["hhmm"] = df["start"].dt.strftime("%H:%M")
+    df["weekday"] = df["start"].dt.weekday
+    return df[["start", "date", "hhmm", "weekday", "kwh"]]
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner="Loading tariffs…")
+def load_tariffs() -> pd.DataFrame:
+    ws = client().open_by_key(SHEET_ID_ENERGY).worksheet("Tariffs")
+    rows = ws.get_all_values()
+    df = pd.DataFrame(rows[1:], columns=rows[0])
+    df = df[df["Valid From"].str.strip() != ""].copy()
+    df["valid_from"] = pd.to_datetime(df["Valid From"])
+    df["unit_rate_p"] = pd.to_numeric(df["Unit Rate (p/kWh inc VAT)"])
+    df["standing_p_day"] = pd.to_numeric(df["Standing Charge (p/day inc VAT)"])
+    return df[["valid_from", "unit_rate_p", "standing_p_day"]].sort_values("valid_from")
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner="Loading temperature data…")
+def load_temperature() -> pd.DataFrame:
+    ws = client().open_by_key(SHEET_ID_TEMP).worksheet("Temperature")
+    rows = ws.get_all_values()
+    df = pd.DataFrame(rows[1:], columns=rows[0])
+    df = df[["Timestamp", "Temp_c"]].copy()
+    df["ts"] = pd.to_datetime(df["Timestamp"], format="%d/%m/%Y %H:%M:%S", errors="coerce")
+    df["temp_c"] = pd.to_numeric(df["Temp_c"], errors="coerce")
+    df = df.dropna(subset=["ts", "temp_c"]).sort_values("ts").reset_index(drop=True)
+    df["date"] = df["ts"].dt.date
+    df["hour"] = df["ts"].dt.hour
+    df["weekday"] = df["ts"].dt.weekday
+    return df[["ts", "date", "hour", "weekday", "temp_c"]]
+
+
+def join_cost(energy: pd.DataFrame, tariffs: pd.DataFrame) -> pd.DataFrame:
+    """Attach unit rate + standing per slot. Cost in £. Pure function — not cached."""
+    out = pd.merge_asof(
+        energy.sort_values("start"),
+        tariffs.rename(columns={"valid_from": "start"}),
+        on="start",
+        direction="backward",
+    )
+    out["energy_cost_p"] = out["kwh"] * out["unit_rate_p"]
+    out["standing_p_slot"] = out["standing_p_day"] / 48
+    out["cost_gbp"] = (out["energy_cost_p"] + out["standing_p_slot"]) / 100
+    out["energy_gbp"] = out["energy_cost_p"] / 100
+    out["standing_gbp"] = out["standing_p_slot"] / 100
+    return out
