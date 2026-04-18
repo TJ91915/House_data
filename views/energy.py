@@ -112,10 +112,12 @@ def chart_time_of_day(df: pd.DataFrame) -> go.Figure:
     return style(fig)
 
 
-def chart_weekday_sum(df: pd.DataFrame) -> go.Figure:
+def chart_weekday_avg(df: pd.DataFrame) -> go.Figure:
     dow_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    # Sum kWh per calendar date first, then average across dates sharing a weekday
+    per_day = df.groupby(["date", "weekday"])["kwh"].sum().reset_index()
     grp = (
-        df.groupby("weekday")["kwh"].sum()
+        per_day.groupby("weekday")["kwh"].mean()
         .reindex(range(7))
         .reset_index()
     )
@@ -123,10 +125,10 @@ def chart_weekday_sum(df: pd.DataFrame) -> go.Figure:
     fig = go.Figure(go.Bar(
         x=grp["label"], y=grp["kwh"],
         marker=dict(color=C_KWH),
-        hovertemplate="%{x}<br>%{y:,.1f} kWh<extra></extra>",
+        hovertemplate="%{x}<br>%{y:,.2f} kWh<extra></extra>",
     ))
     fig.update_layout(
-        title="Total kWh by day of week",
+        title="Average kWh per day — by day of week",
         yaxis=dict(title="kWh", rangemode="tozero"),
         xaxis=dict(title=""),
         height=340,
@@ -135,10 +137,13 @@ def chart_weekday_sum(df: pd.DataFrame) -> go.Figure:
     return style(fig)
 
 
-def chart_hour_sum(df: pd.DataFrame) -> go.Figure:
-    hours = df["start"].dt.hour
+def chart_hour_avg(df: pd.DataFrame) -> go.Figure:
+    # Sum each hour's kWh per date (2 half-hour slots collapse to one hour), then
+    # average across dates so each bar is the mean kWh an hour uses on a typical day.
+    d = df.assign(hour=df["start"].dt.hour)
+    per_day_hour = d.groupby(["date", "hour"])["kwh"].sum().reset_index()
     grp = (
-        df.assign(hour=hours).groupby("hour")["kwh"].sum()
+        per_day_hour.groupby("hour")["kwh"].mean()
         .reindex(range(24))
         .reset_index()
     )
@@ -146,10 +151,10 @@ def chart_hour_sum(df: pd.DataFrame) -> go.Figure:
     fig = go.Figure(go.Bar(
         x=grp["label"], y=grp["kwh"],
         marker=dict(color=C_KWH),
-        hovertemplate="%{x}<br>%{y:,.1f} kWh<extra></extra>",
+        hovertemplate="%{x}<br>%{y:,.2f} kWh<extra></extra>",
     ))
     fig.update_layout(
-        title="Total kWh by hour of day",
+        title="Average kWh per hour — by hour of day",
         yaxis=dict(title="kWh", rangemode="tozero"),
         xaxis=dict(title="", tickangle=-45),
         height=340,
@@ -214,6 +219,6 @@ with col_b:
 
 col_c, col_d = st.columns([1, 1])
 with col_c:
-    st.plotly_chart(chart_weekday_sum(dfw), use_container_width=True)
+    st.plotly_chart(chart_weekday_avg(dfw), use_container_width=True)
 with col_d:
-    st.plotly_chart(chart_hour_sum(dfw), use_container_width=True)
+    st.plotly_chart(chart_hour_avg(dfw), use_container_width=True)
