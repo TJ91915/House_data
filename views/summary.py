@@ -1,4 +1,4 @@
-"""Summary page — homepage embed snapshot of all three datasets."""
+"""Summary page — homepage embed snapshot across all five datasets."""
 from __future__ import annotations
 
 from datetime import timedelta
@@ -8,10 +8,11 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from lib import (
-    C_ENERGY, C_KWH, C_TEMP_MEAN, C_WATER,
+    C_ENERGY, C_HOT_WATER, C_KWH, C_TEMP_MEAN, C_WATER,
     derive_dd_timeline, derive_water_tariff_history,
-    join_cost, join_water_cost,
-    load_energy, load_motion, load_tariffs, load_temperature,
+    join_cost, join_hot_water_paid, join_water_cost,
+    load_energy, load_hot_water, load_hot_water_dd,
+    load_motion, load_tariffs, load_temperature,
     load_water, load_water_tariffs,
 )
 
@@ -45,12 +46,15 @@ temp = load_temperature()
 motion = load_motion()
 water_raw = load_water()
 water_tc = load_water_tariffs()
+hot_water_raw = load_hot_water()
+hot_water_dd = load_hot_water_dd()
 energy = join_cost(energy_raw, tariffs).assign(d=lambda x: x["start"].dt.date)
 water = join_water_cost(
     water_raw,
     derive_water_tariff_history(water_tc),
     derive_dd_timeline(water_tc),
 )
+hot_water = join_hot_water_paid(hot_water_raw, hot_water_dd)
 
 # ---------- compute KPIs ----------
 # Indoor temp: latest reading, delta vs same hour yesterday
@@ -102,50 +106,84 @@ avg_water_cost = float(prior_w["total_cost_gbp"].mean()) if not prior_w.empty el
 water_delta = water_today - avg_water_l if avg_water_l is not None else None
 water_cost_delta = water_today_cost - avg_water_cost if avg_water_cost is not None else None
 
-# Last reading across all four sources
-last_updated = max(energy["start"].max(), temp["ts"].max(), motion["ts"].max(), water["date"].max())
+# Hot water: latest day's kWh + cost, deltas vs prior-7-day avg
+today_h = hot_water["date"].max().date()
+today_h_row = hot_water[hot_water["date"].dt.date == today_h].iloc[0]
+hot_water_today = float(today_h_row["kwh_used"])
+hot_water_today_cost = float(today_h_row["total_cost_gbp"])
+prior_h_dates = pd.to_datetime([today_h - timedelta(days=i) for i in range(1, 8)])
+prior_h = hot_water[hot_water["date"].isin(prior_h_dates)]
+avg_hot_water_kwh = float(prior_h["kwh_used"].mean()) if not prior_h.empty else None
+avg_hot_water_cost = float(prior_h["total_cost_gbp"].mean()) if not prior_h.empty else None
+hot_water_delta = hot_water_today - avg_hot_water_kwh if avg_hot_water_kwh is not None else None
+hot_water_cost_delta = (
+    hot_water_today_cost - avg_hot_water_cost if avg_hot_water_cost is not None else None
+)
+
+# Last reading across all five sources
+last_updated = max(
+    energy["start"].max(), temp["ts"].max(), motion["ts"].max(),
+    water["date"].max(), hot_water["date"].max(),
+)
 
 # ---------- render ----------
 st.title("🏠 Home")
 
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric(
+# Top row — state of the house / today's consumption
+r1c1, r1c2, r1c3, r1c4 = st.columns(4)
+r1c1.metric(
     "Indoor temp",
     f"{latest_temp:.1f} °C",
     f"{temp_delta:+.1f} °C" if temp_delta is not None else None,
     delta_color="off",
     help=f"As of {latest_temp_ts:%H:%M, %a %d %b}. Δ vs same hour yesterday.",
 )
-c2.metric(
-    f"kWh — {today_e:%d %b}",
-    f"{today_kwh:.2f}",
-    f"{kwh_delta:+.2f} vs 7d avg" if kwh_delta is not None else None,
-    delta_color="inverse",
-)
-c3.metric(
-    f"Cost — {today_e:%d %b}",
-    f"£{today_cost:.2f}",
-    f"{cost_delta:+.2f} vs 7d avg" if cost_delta is not None else None,
-    delta_color="inverse",
-)
-c4.metric(
+r1c2.metric(
     f"Motion — {today_m:%d %b}",
     f"{motion_today:,}",
     f"{motion_delta:+.0f} vs 7d avg" if motion_delta is not None else None,
     delta_color="off",
 )
-c5.metric(
+r1c3.metric(
     f"Water — {today_w:%d %b}",
     f"{water_today:,.0f} L",
     f"{water_delta:+,.0f} vs 7d avg" if water_delta is not None else None,
     delta_color="inverse",
 )
-c6.metric(
+r1c4.metric(
+    f"Hot Water — {today_h:%d %b}",
+    f"{hot_water_today:,.1f} kWh",
+    f"{hot_water_delta:+,.1f} vs 7d avg" if hot_water_delta is not None else None,
+    delta_color="inverse",
+)
+
+# Bottom row — today's £ spend
+r2c1, r2c2, r2c3, r2c4 = st.columns(4)
+r2c1.metric(
+    f"kWh — {today_e:%d %b}",
+    f"{today_kwh:.2f}",
+    f"{kwh_delta:+.2f} vs 7d avg" if kwh_delta is not None else None,
+    delta_color="inverse",
+)
+r2c2.metric(
+    f"Energy cost — {today_e:%d %b}",
+    f"£{today_cost:.2f}",
+    f"£{cost_delta:+.2f} vs 7d avg" if cost_delta is not None else None,
+    delta_color="inverse",
+)
+r2c3.metric(
     f"Water cost — {today_w:%d %b}",
     f"£{water_today_cost:.2f}",
     f"£{water_cost_delta:+.2f} vs 7d avg" if water_cost_delta is not None else None,
     delta_color="inverse",
     help="Calculated daily cost: fresh + waste + standing − rebate.",
+)
+r2c4.metric(
+    f"Hot Water cost — {today_h:%d %b}",
+    f"£{hot_water_today_cost:.2f}",
+    f"£{hot_water_cost_delta:+.2f} vs 7d avg" if hot_water_cost_delta is not None else None,
+    delta_color="inverse",
+    help="kWh cost + service charge per day.",
 )
 
 # ---------- 14-day sparklines ----------
@@ -175,8 +213,13 @@ water_series = (
     .set_index("date")["cons_l"]
     .reindex(water_window, fill_value=0)
 )
+hot_water_series = (
+    hot_water[hot_water["date"].isin(water_window)]
+    .set_index("date")["kwh_used"]
+    .reindex(water_window, fill_value=0)
+)
 
-s1, s2, s3, s4 = st.columns(4)
+s1, s2, s3, s4, s5 = st.columns(5)
 with s1:
     st.caption("14-day temp (mean °C)")
     st.plotly_chart(
@@ -199,6 +242,12 @@ with s4:
     st.caption("14-day water (L)")
     st.plotly_chart(
         _sparkline(window, water_series.values, C_WATER, kind="bar"),
+        use_container_width=True, config={"displayModeBar": False},
+    )
+with s5:
+    st.caption("14-day hot water (kWh)")
+    st.plotly_chart(
+        _sparkline(window, hot_water_series.values, C_HOT_WATER, kind="bar"),
         use_container_width=True, config={"displayModeBar": False},
     )
 

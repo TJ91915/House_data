@@ -40,6 +40,7 @@ SHEET_ID_ENERGY = "1stKNr_MzA3fJL3kKSofMqxK4Nu66XbVtqsLzyosKqpQ"
 SHEET_ID_TEMP   = "1ZOiXI_23xaTC7QAT6Z_l7v6H9KefbzTqM0UI5c7bDB0"
 SHEET_ID_MOTION = "1rL54qg6g1eOxGZTWWkflqRFpE7QbFF11TUXyUhh6ov4"
 SHEET_ID_WATER  = "1yoHfWhVb-g5blWnULsslQv1enkup48pRzbpRWX26ixo"
+SHEET_ID_HOT_WATER = "1I3RQrsu7W9Bva_xBJh_L8i5eBunKH64zMhDqTQbJenc"
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 LOCAL_KEY = Path(__file__).parent / "service-account-key.json"
@@ -58,13 +59,13 @@ C_TEMP_MAX  = "#C07855"   # warm terracotta
 C_TEMP_RIBBON = "rgba(123, 155, 126, 0.18)"
 
 C_WATER     = "#6B8DA8"   # muted slate-blue (cold water)
+C_HOT_WATER = "#C28B6E"   # warm copper (hot water — district heating)
 C_DEBT      = "#B85450"   # muted red — for under-paid / debt readings
-# Reserved for future Hot Water dataset:
-# C_HOT_WATER = "#C28B6E"   # warm copper
 
 HEAT_SCALE       = [[0, "#F3EADB"], [0.5, "#D49A6A"], [1, "#A84F2C"]]
 HEAT_SCALE_TEMP  = [[0, "#7E9FBD"], [0.5, "#F0E6D6"], [1, "#C07855"]]  # cool→warm
 HEAT_SCALE_WATER = [[0, "#F3EADB"], [0.5, "#9BB8CC"], [1, "#3B6884"]]  # cream→deep slate
+HEAT_SCALE_HOT_WATER = [[0, "#F3EADB"], [0.5, "#D4A788"], [1, "#9C5638"]]  # cream→deep copper
 
 
 # ---------- auth ----------
@@ -362,4 +363,62 @@ def join_water_cost(
     out["monthly_dd"] = dd_join["monthly_dd"].values
     out["paid_per_day_gbp"] = out["monthly_dd"] * 12 / 365
 
+    return out
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner="Loading hot water data…")
+def load_hot_water() -> pd.DataFrame:
+    """Daily district-heater readings + pre-computed costs.
+
+    Pulls from the `Raw data` tab on the Hot Water sheet. The user keeps
+    `Total kWh cost (p) per day` and `Total Service charge per day` calculated
+    in-sheet, so we just read them and convert pence → £.
+    """
+    ws = client().open_by_key(SHEET_ID_HOT_WATER).worksheet("Raw data")
+    rows = ws.get_all_values()
+    df = pd.DataFrame(rows[1:], columns=[c.strip() for c in rows[0]])
+    df["date"] = pd.to_datetime(df["Date"], format="%d/%m/%Y", errors="coerce")
+    df["unit_rate_p_kwh"] = pd.to_numeric(df["Unit Rate (p/kWh)"], errors="coerce")
+    df["service_p_day"] = pd.to_numeric(df["Service Charge (p/day)"], errors="coerce")
+    df["meter_read"] = pd.to_numeric(df["Reading"].str.replace(",", "", regex=False), errors="coerce")
+    df["kwh_used"] = pd.to_numeric(df["kWh used"], errors="coerce")
+    df["kwh_cost_p"] = pd.to_numeric(df["Total kWh cost (p) per day"], errors="coerce")
+    df["service_p"] = pd.to_numeric(df["Total Service charge per day"], errors="coerce")
+    # Drop rows without a date or without kWh data (e.g. future-padded blank rows)
+    df = df.dropna(subset=["date", "kwh_used"]).sort_values("date").reset_index(drop=True)
+    df["weekday"] = df["date"].dt.weekday
+    df["kwh_cost_gbp"] = df["kwh_cost_p"].fillna(0) / 100
+    df["service_gbp"] = df["service_p"].fillna(0) / 100
+    df["total_cost_gbp"] = df["kwh_cost_gbp"] + df["service_gbp"]
+    return df[[
+        "date", "weekday", "meter_read", "kwh_used",
+        "unit_rate_p_kwh", "service_p_day",
+        "kwh_cost_gbp", "service_gbp", "total_cost_gbp",
+    ]]
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner="Loading hot water DD timeline…")
+def load_hot_water_dd() -> pd.DataFrame:
+    """Read the `DD timeline` step-function from the Hot Water sheet."""
+    ws = client().open_by_key(SHEET_ID_HOT_WATER).worksheet("DD timeline")
+    rows = ws.get_all_values()
+    df = pd.DataFrame(rows[1:], columns=[c.strip() for c in rows[0]])
+    df["valid_from"] = pd.to_datetime(df["Valid From"], errors="coerce")
+    df["monthly_dd"] = pd.to_numeric(df["Monthly DD (£)"], errors="coerce")
+    return df.dropna(subset=["valid_from"]).sort_values("valid_from").reset_index(drop=True)
+
+
+def join_hot_water_paid(hw: pd.DataFrame, dd_timeline: pd.DataFrame) -> pd.DataFrame:
+    """Attach a daily-DD share to each hot-water row for the running-balance chart."""
+    out = hw.sort_values("date").copy()
+    if dd_timeline.empty:
+        out["monthly_dd"] = 0.0
+    else:
+        joined = pd.merge_asof(
+            out[["date"]],
+            dd_timeline[["valid_from", "monthly_dd"]],
+            left_on="date", right_on="valid_from", direction="backward",
+        )
+        out["monthly_dd"] = joined["monthly_dd"].fillna(0).values
+    out["paid_per_day_gbp"] = out["monthly_dd"] * 12 / 365
     return out
