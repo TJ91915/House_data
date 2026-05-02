@@ -15,6 +15,7 @@ CACHE_TTL = 7200  # 2 hours
 SHEET_ID_ENERGY = "1stKNr_MzA3fJL3kKSofMqxK4Nu66XbVtqsLzyosKqpQ"
 SHEET_ID_TEMP   = "1ZOiXI_23xaTC7QAT6Z_l7v6H9KefbzTqM0UI5c7bDB0"
 SHEET_ID_MOTION = "1rL54qg6g1eOxGZTWWkflqRFpE7QbFF11TUXyUhh6ov4"
+SHEET_ID_WATER  = "1yoHfWhVb-g5blWnULsslQv1enkup48pRzbpRWX26ixo"
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 LOCAL_KEY = Path(__file__).parent / "service-account-key.json"
@@ -32,8 +33,13 @@ C_TEMP_MEAN = "#7B9B7E"   # sage
 C_TEMP_MAX  = "#C07855"   # warm terracotta
 C_TEMP_RIBBON = "rgba(123, 155, 126, 0.18)"
 
-HEAT_SCALE      = [[0, "#F3EADB"], [0.5, "#D49A6A"], [1, "#A84F2C"]]
-HEAT_SCALE_TEMP = [[0, "#7E9FBD"], [0.5, "#F0E6D6"], [1, "#C07855"]]  # cool→warm
+C_WATER     = "#6B8DA8"   # muted slate-blue (cold water)
+# Reserved for future Hot Water dataset:
+# C_HOT_WATER = "#C28B6E"   # warm copper
+
+HEAT_SCALE       = [[0, "#F3EADB"], [0.5, "#D49A6A"], [1, "#A84F2C"]]
+HEAT_SCALE_TEMP  = [[0, "#7E9FBD"], [0.5, "#F0E6D6"], [1, "#C07855"]]  # cool→warm
+HEAT_SCALE_WATER = [[0, "#F3EADB"], [0.5, "#9BB8CC"], [1, "#3B6884"]]  # cream→deep slate
 
 
 # ---------- auth ----------
@@ -134,6 +140,21 @@ def load_motion() -> pd.DataFrame:
     df["hour"] = df["ts"].dt.hour
     df["weekday"] = df["ts"].dt.weekday
     return df[["ts", "date", "hour", "weekday"]]
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner="Loading water data…")
+def load_water() -> pd.DataFrame:
+    """Daily water meter readings + per-day consumption (one row per day)."""
+    ws = client().open_by_key(SHEET_ID_WATER).worksheet("Water")
+    rows = ws.get_all_values()
+    df = pd.DataFrame(rows[1:], columns=rows[0])
+    df["date"] = pd.to_datetime(df["Date"], format="%d/%m/%Y", errors="coerce")
+    df["meter_l"] = pd.to_numeric(df["Meter read"], errors="coerce")
+    df["cons_l"] = pd.to_numeric(df["Consumption in Litres"], errors="coerce")
+    df["cons_m3"] = pd.to_numeric(df["Consumption Cubic meter"], errors="coerce")
+    df = df.dropna(subset=["date", "cons_l"]).sort_values("date").reset_index(drop=True)
+    df["weekday"] = df["date"].dt.weekday
+    return df[["date", "weekday", "meter_l", "cons_l", "cons_m3"]]
 
 
 def join_cost(energy: pd.DataFrame, tariffs: pd.DataFrame) -> pd.DataFrame:

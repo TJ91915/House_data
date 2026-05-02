@@ -8,8 +8,8 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from lib import (
-    C_ENERGY, C_KWH, C_TEMP_MEAN,
-    load_energy, load_motion, load_tariffs, load_temperature, join_cost,
+    C_ENERGY, C_KWH, C_TEMP_MEAN, C_WATER,
+    load_energy, load_motion, load_tariffs, load_temperature, load_water, join_cost,
 )
 
 
@@ -40,6 +40,7 @@ energy_raw = load_energy()
 tariffs = load_tariffs()
 temp = load_temperature()
 motion = load_motion()
+water = load_water()
 energy = join_cost(energy_raw, tariffs).assign(d=lambda x: x["start"].dt.date)
 
 # ---------- compute KPIs ----------
@@ -89,13 +90,21 @@ baseload_slot = energy_raw[
 ]["kwh"].mean()
 baseload = float(baseload_slot * 48) if pd.notna(baseload_slot) else 0.0
 
-# Last reading across all three sources
-last_updated = max(energy["start"].max(), temp["ts"].max(), motion["ts"].max())
+# Water: latest day's L + delta vs prior-7-day avg (water is daily-grain, one row per day)
+today_w = water["date"].max().date()
+water_today = float(water.loc[water["date"].dt.date == today_w, "cons_l"].sum())
+prior_w_dates = pd.to_datetime([today_w - timedelta(days=i) for i in range(1, 8)])
+prior_w = water[water["date"].isin(prior_w_dates)]["cons_l"]
+avg_water = float(prior_w.mean()) if not prior_w.empty else None
+water_delta = water_today - avg_water if avg_water is not None else None
+
+# Last reading across all four sources
+last_updated = max(energy["start"].max(), temp["ts"].max(), motion["ts"].max(), water["date"].max())
 
 # ---------- render ----------
 st.title("🏠 Home")
 
-c1, c2, c3, c4, c5 = st.columns(5)
+c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric(
     "Indoor temp",
     f"{latest_temp:.1f} °C",
@@ -122,6 +131,12 @@ c4.metric(
     delta_color="off",
 )
 c5.metric(
+    f"Water — {today_w:%d %b}",
+    f"{water_today:,.0f} L",
+    f"{water_delta:+,.0f} vs 7d avg" if water_delta is not None else None,
+    delta_color="inverse",
+)
+c6.metric(
     "Baseload",
     f"{baseload:.2f} kWh/day",
     help="Mean overnight (01:00–04:30) draw scaled to a full day, last 7 days.",
@@ -148,8 +163,14 @@ motion_series = (
     .groupby("date").size()
     .reindex(window, fill_value=0)
 )
+water_window = pd.to_datetime(window)
+water_series = (
+    water[water["date"].isin(water_window)]
+    .set_index("date")["cons_l"]
+    .reindex(water_window, fill_value=0)
+)
 
-s1, s2, s3 = st.columns(3)
+s1, s2, s3, s4 = st.columns(4)
 with s1:
     st.caption("14-day temp (mean °C)")
     st.plotly_chart(
@@ -166,6 +187,12 @@ with s3:
     st.caption("14-day motion events")
     st.plotly_chart(
         _sparkline(window, motion_series.values, C_ENERGY),
+        use_container_width=True, config={"displayModeBar": False},
+    )
+with s4:
+    st.caption("14-day water (L)")
+    st.plotly_chart(
+        _sparkline(window, water_series.values, C_WATER, kind="bar"),
         use_container_width=True, config={"displayModeBar": False},
     )
 
