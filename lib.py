@@ -35,6 +35,7 @@ C_TEMP_MAX  = "#C07855"   # warm terracotta
 C_TEMP_RIBBON = "rgba(123, 155, 126, 0.18)"
 
 C_WATER     = "#6B8DA8"   # muted slate-blue (cold water)
+C_DEBT      = "#B85450"   # muted red — for under-paid / debt readings
 # Reserved for future Hot Water dataset:
 # C_HOT_WATER = "#C28B6E"   # warm copper
 

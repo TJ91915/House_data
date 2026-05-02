@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from lib import (
-    C_KWH, C_ROLLING, C_STANDING, C_WATER, HEAT_SCALE_WATER,
+    C_DEBT, C_GRID, C_KWH, C_ROLLING, C_STANDING, C_TEXT, C_WATER, HEAT_SCALE_WATER,
     derive_dd_timeline, derive_water_tariff_history,
     join_water_cost, load_water, load_water_tariffs, style,
 )
@@ -66,6 +66,34 @@ def chart_daily_cost(df: pd.DataFrame) -> go.Figure:
         legend=dict(orientation="h", y=-0.15),
         height=380,
         margin=dict(l=40, r=40, t=60, b=40),
+    )
+    return style(fig)
+
+
+def chart_running_balance(df: pd.DataFrame) -> go.Figure:
+    """Cumulative paid − cost balance: positive = paid up / credit (charcoal),
+    negative = under-paid / debt (red). Hovers around the zero line."""
+    d = df.copy()
+    d["daily_net"] = d["paid_per_day_gbp"] - d["total_cost_gbp"]
+    d["balance"] = d["daily_net"].cumsum()
+    colors = [C_TEXT if v >= 0 else C_DEBT for v in d["balance"]]
+    fig = go.Figure(go.Bar(
+        x=d["date"], y=d["balance"],
+        marker_color=colors,
+        hovertemplate=(
+            "%{x|%a %d %b %Y}<br>Balance: £%{y:.2f}<br>"
+            "Net today: £%{customdata:.3f}<extra></extra>"
+        ),
+        customdata=d["daily_net"],
+    ))
+    fig.add_hline(y=0, line_dash="dash", line_color=C_GRID, line_width=1)
+    fig.update_layout(
+        title="Running balance — cumulative (paid − cost). Black = paid up · Red = under-paid",
+        yaxis=dict(title="£"),
+        xaxis=dict(title=""),
+        height=380,
+        margin=dict(l=40, r=40, t=60, b=40),
+        showlegend=False,
     )
     return style(fig)
 
@@ -203,6 +231,7 @@ c6.metric("Latest day", f"{latest_row['cons_l']:,.0f} L · £{latest_row['total_
 
 st.plotly_chart(chart_daily_volume(dfw), use_container_width=True)
 st.plotly_chart(chart_daily_cost(dfw), use_container_width=True)
+st.plotly_chart(chart_running_balance(dfw), use_container_width=True)
 
 col_a, col_b = st.columns([1, 1])
 with col_a:
