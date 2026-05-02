@@ -13,7 +13,8 @@ load_temperature()
 load_motion()
 
 pg = st.navigation([
-    st.Page("views/energy.py", title="Energy", icon="⚡", default=True),
+    st.Page("views/summary.py", title="Summary", icon="🏠", default=True),
+    st.Page("views/energy.py", title="Energy", icon="⚡"),
     st.Page("views/temperature.py", title="Temperature", icon="🌡️"),
     st.Page("views/motion.py", title="Motion", icon="🚶"),
 ])
