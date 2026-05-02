@@ -39,8 +39,9 @@ def baseload_kwh_per_day(df: pd.DataFrame) -> float:
 
 # ---------- charts ----------
 def chart_daily(df_daily: pd.DataFrame, freq: str) -> go.Figure:
+    from lib import freq_label as _freq_label
     d = resample(df_daily, freq)
-    label = {"D": "Daily", "W": "Weekly", "MS": "Monthly"}[freq]
+    label = _freq_label(freq)
     fig = go.Figure()
     fig.add_bar(x=d["date"], y=d["energy_gbp"], name="Energy (£)", marker_color=C_ENERGY)
     fig.add_bar(x=d["date"], y=d["standing_gbp"], name="Standing (£)", marker_color=C_STANDING)
@@ -186,9 +187,8 @@ with st.sidebar:
     )
     start_d, end_d = dr if isinstance(dr, tuple) and len(dr) == 2 else (min_d, max_d)
 
-    freq_label = st.radio("Aggregation", ["Daily", "Weekly", "Monthly"],
-                          horizontal=True, key="energy_freq")
-    freq = {"Daily": "D", "Weekly": "W", "Monthly": "MS"}[freq_label]
+    from lib import freq_selector
+    freq = freq_selector("energy")
 
     st.caption(f"Data: {min_d} → {max_d}  ·  {len(df):,} half-hour slots")
 

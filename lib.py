@@ -12,6 +12,29 @@ from google.oauth2.service_account import Credentials
 
 CACHE_TTL = 7200  # 2 hours
 
+# ---------- shared aggregation control ----------
+# Shared by Energy / Temperature / Motion / Water pages so the radio looks identical.
+FREQ_OPTIONS = ["Daily", "Weekly", "Monthly", "Yearly"]
+FREQ_MAP = {"Daily": "D", "Weekly": "W", "Monthly": "MS", "Yearly": "YS"}
+
+
+def freq_selector(key: str, default: str = "Daily") -> str:
+    """Render a horizontal radio in the current container; return a pandas resample alias."""
+    label = st.radio(
+        "Aggregation",
+        FREQ_OPTIONS,
+        index=FREQ_OPTIONS.index(default),
+        horizontal=True,
+        key=f"{key}_freq",
+    )
+    return FREQ_MAP[label]
+
+
+def freq_label(freq_str: str) -> str:
+    """Inverse of freq_selector: 'D' -> 'Daily', 'W' -> 'Weekly', etc. For chart titles."""
+    inv = {v: k for k, v in FREQ_MAP.items()}
+    return inv.get(freq_str, freq_str)
+
 # Sheet IDs
 SHEET_ID_ENERGY = "1stKNr_MzA3fJL3kKSofMqxK4Nu66XbVtqsLzyosKqpQ"
 SHEET_ID_TEMP   = "1ZOiXI_23xaTC7QAT6Z_l7v6H9KefbzTqM0UI5c7bDB0"

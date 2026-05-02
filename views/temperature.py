@@ -9,22 +9,21 @@ import streamlit as st
 
 from lib import (
     C_TEMP_MIN, C_TEMP_MEAN, C_TEMP_MAX, C_TEMP_RIBBON, HEAT_SCALE_TEMP,
-    style, load_temperature,
+    freq_label, freq_selector, load_temperature, style,
 )
 
 
-def daily_stats(df: pd.DataFrame) -> pd.DataFrame:
-    g = df.groupby("date").agg(
-        min_c=("temp_c", "min"),
-        mean_c=("temp_c", "mean"),
-        max_c=("temp_c", "max"),
-    ).reset_index()
-    g["date"] = pd.to_datetime(g["date"])
-    return g
+def period_stats(df: pd.DataFrame, freq: str = "D") -> pd.DataFrame:
+    """Resample readings to the chosen freq, returning min/mean/max per period."""
+    s = df.assign(date=pd.to_datetime(df["date"])).set_index("date")["temp_c"]
+    g = s.resample(freq).agg(["min", "mean", "max"]).reset_index()
+    g.columns = ["date", "min_c", "mean_c", "max_c"]
+    return g.dropna(subset=["mean_c"])
 
 
 # ---------- charts ----------
-def chart_daily_ribbon(d: pd.DataFrame) -> go.Figure:
+def chart_ribbon(d: pd.DataFrame, freq: str) -> go.Figure:
+    label = freq_label(freq)
     fig = go.Figure()
     # Max line (drawn first to anchor the fill)
     fig.add_scatter(
@@ -43,7 +42,7 @@ def chart_daily_ribbon(d: pd.DataFrame) -> go.Figure:
         mode="lines", line=dict(color=C_TEMP_MEAN, width=2.5),
     )
     fig.update_layout(
-        title="Daily temperature — min / mean / max (°C)",
+        title=f"{label} temperature — min / mean / max (°C)",
         yaxis=dict(title="°C"),
         xaxis=dict(title=""),
         legend=dict(orientation="h", y=-0.15),
@@ -156,6 +155,8 @@ with st.sidebar:
     )
     start_d, end_d = dr if isinstance(dr, tuple) and len(dr) == 2 else (min_d, max_d)
 
+    freq = freq_selector("temp")
+
     st.caption(f"Data: {min_d} → {max_d}  ·  {len(df):,} readings")
 
 mask = (df["ts"].dt.date >= start_d) & (df["ts"].dt.date <= end_d)
@@ -180,8 +181,8 @@ c3.metric(f"{latest_date:%d %b} max", f"{today_df['temp_c'].max():.1f} °C")
 c4.metric("7-day avg", f"{avg_7d:.1f} °C")
 
 # Charts
-d_daily = daily_stats(dfw)
-st.plotly_chart(chart_daily_ribbon(d_daily), use_container_width=True)
+d_period = period_stats(dfw, freq=freq)
+st.plotly_chart(chart_ribbon(d_period, freq), use_container_width=True)
 
 col_a, col_b = st.columns([1, 1])
 with col_a:

@@ -7,7 +7,7 @@ import streamlit as st
 
 from lib import (
     C_ENERGY, C_STANDING, C_KWH, C_ROLLING, C_TEMP_MIN, C_TEMP_MEAN, C_TEMP_MAX,
-    style, load_motion,
+    freq_label, freq_selector, load_motion, style,
 )
 
 DOW_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -49,16 +49,17 @@ def chart_hour_by_weekday(df: pd.DataFrame) -> go.Figure:
     return style(fig)
 
 
-def chart_events_per_day(df: pd.DataFrame) -> go.Figure:
-    grp = df.groupby("date").size().rename("events").reset_index()
-    grp["date"] = pd.to_datetime(grp["date"])
+def chart_events_per_period(df: pd.DataFrame, freq: str) -> go.Figure:
+    s = df.assign(date=pd.to_datetime(df["date"])).set_index("date")
+    grp = s.resample(freq).size().rename("events").reset_index()
+    label = freq_label(freq)
     fig = go.Figure(go.Bar(
         x=grp["date"], y=grp["events"],
         marker=dict(color=C_ENERGY),
-        hovertemplate="%{x|%a %d %b %Y}<br>%{y} events<extra></extra>",
+        hovertemplate="%{x|%a %d %b %Y}<br>%{y:,} events<extra></extra>",
     ))
     fig.update_layout(
-        title=f"Motion events per day ({len(df):,} events over {len(grp):,} days)",
+        title=f"{label} motion events  ·  {len(df):,} events over {len(grp):,} {label.lower()} buckets",
         yaxis=dict(title="Events", rangemode="tozero"),
         xaxis=dict(title=""),
         height=380,
@@ -88,6 +89,8 @@ with st.sidebar:
     )
     start_d, end_d = dr if isinstance(dr, tuple) and len(dr) == 2 else (min_d, max_d)
 
+    freq = freq_selector("motion")
+
     st.caption(f"Data: {min_d} → {max_d}  ·  {len(df):,} motion events")
 
 mask = (df["ts"].dt.date >= start_d) & (df["ts"].dt.date <= end_d)
@@ -113,4 +116,4 @@ c4.metric("Busiest weekday", DOW_LABELS[busiest_weekday],
           help=f"{int(weekday_totals.max()):,} events on {DOW_LABELS[busiest_weekday]}s")
 
 st.plotly_chart(chart_hour_by_weekday(dfw), use_container_width=True)
-st.plotly_chart(chart_events_per_day(dfw), use_container_width=True)
+st.plotly_chart(chart_events_per_period(dfw, freq), use_container_width=True)

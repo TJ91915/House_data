@@ -8,26 +8,56 @@ import streamlit as st
 from lib import (
     C_DEBT, C_GRID, C_KWH, C_ROLLING, C_STANDING, C_TEXT, C_WATER, HEAT_SCALE_WATER,
     derive_dd_timeline, derive_water_tariff_history,
+    freq_label, freq_selector,
     join_water_cost, load_water, load_water_tariffs, style,
 )
 
 
+def _aggregate(df: pd.DataFrame, freq: str) -> pd.DataFrame:
+    """Resample the costed water dataframe to the chosen freq.
+
+    All money/volume columns sum (period totals). `paid_per_day_gbp` is
+    aliased to `paid_gbp_period` so charts can read one consistent name
+    regardless of freq.
+    """
+    if freq == "D":
+        out = df.copy()
+        out["paid_gbp_period"] = out["paid_per_day_gbp"]
+        return out
+    return (
+        df.set_index("date")
+        .resample(freq)
+        .agg({
+            "cons_l": "sum",
+            "cons_m3": "sum",
+            "fw_subtotal_gbp": "sum",
+            "ww_subtotal_gbp": "sum",
+            "total_cost_gbp": "sum",
+            "paid_per_day_gbp": "sum",
+        })
+        .reset_index()
+        .rename(columns={"paid_per_day_gbp": "paid_gbp_period"})
+    )
+
+
 # ---------- charts ----------
-def chart_daily_volume(df: pd.DataFrame) -> go.Figure:
-    """Daily L bar chart with 7-day rolling-mean overlay."""
-    d = df.assign(roll_7=df["cons_l"].rolling(7, min_periods=1).mean())
+def chart_volume(df_agg: pd.DataFrame, freq: str) -> go.Figure:
+    """Volume bar chart at the chosen freq. 7-day rolling overlay only on Daily."""
+    label = freq_label(freq)
     fig = go.Figure()
     fig.add_bar(
-        x=d["date"], y=d["cons_l"], name="Daily L",
+        x=df_agg["date"], y=df_agg["cons_l"], name="Litres",
         marker_color=C_WATER,
-        hovertemplate="%{x|%a %d %b %Y}<br>%{y:,.0f} L<extra></extra>",
+        hovertemplate="%{x|%d %b %Y}<br>%{y:,.0f} L<extra></extra>",
     )
-    fig.add_scatter(
-        x=d["date"], y=d["roll_7"], name="7-day avg",
-        mode="lines", line=dict(color=C_ROLLING, width=2, dash="dot"),
-    )
+    if freq == "D" and len(df_agg) >= 7:
+        d = df_agg.assign(roll_7=df_agg["cons_l"].rolling(7, min_periods=1).mean())
+        fig.add_scatter(
+            x=d["date"], y=d["roll_7"], name="7-day avg",
+            mode="lines", line=dict(color=C_ROLLING, width=2, dash="dot"),
+        )
     fig.update_layout(
-        title="Daily water consumption (L)",
+        title=f"{label} water consumption (L)",
         yaxis=dict(title="Litres", rangemode="tozero"),
         xaxis=dict(title=""),
         legend=dict(orientation="h", y=-0.15),
@@ -37,29 +67,27 @@ def chart_daily_volume(df: pd.DataFrame) -> go.Figure:
     return style(fig)
 
 
-def chart_daily_cost(df: pd.DataFrame) -> go.Figure:
-    """Stacked daily £ chart: fresh + waste subtotals, plus 'paid' line for reconciliation."""
+def chart_cost(df_agg: pd.DataFrame, freq: str) -> go.Figure:
+    """Stacked £ chart at the chosen freq: FW + WW subtotals, with paid total overlaid."""
+    label = freq_label(freq)
     fig = go.Figure()
-    # Fresh water (variable + standing) as one stacked bar
     fig.add_bar(
-        x=df["date"], y=df["fw_subtotal_gbp"], name="Fresh water",
+        x=df_agg["date"], y=df_agg["fw_subtotal_gbp"], name="Fresh water",
         marker_color=C_WATER,
-        hovertemplate="%{x|%a %d %b %Y}<br>FW: £%{y:.3f}<extra></extra>",
+        hovertemplate="%{x|%d %b %Y}<br>FW: £%{y:.2f}<extra></extra>",
     )
-    # Waste water (variable + standing − rebate, already netted) on top
     fig.add_bar(
-        x=df["date"], y=df["ww_subtotal_gbp"], name="Waste water (net rebate)",
+        x=df_agg["date"], y=df_agg["ww_subtotal_gbp"], name="Waste water (net rebate)",
         marker_color=C_STANDING,
-        hovertemplate="%{x|%a %d %b %Y}<br>WW: £%{y:.3f}<extra></extra>",
+        hovertemplate="%{x|%d %b %Y}<br>WW: £%{y:.2f}<extra></extra>",
     )
-    # What you actually pay per day (annualised DD share)
     fig.add_scatter(
-        x=df["date"], y=df["paid_per_day_gbp"], name="Paid/day (DD share)",
+        x=df_agg["date"], y=df_agg["paid_gbp_period"], name="Paid (DD share)",
         mode="lines", line=dict(color=C_KWH, width=2, dash="dot"),
-        hovertemplate="%{x|%a %d %b %Y}<br>Paid: £%{y:.3f}/day<extra></extra>",
+        hovertemplate="%{x|%d %b %Y}<br>Paid: £%{y:.2f}<extra></extra>",
     )
     fig.update_layout(
-        title="Daily cost (£) — calculated vs actually paid",
+        title=f"{label} cost (£) — calculated vs actually paid",
         barmode="stack",
         yaxis=dict(title="£", rangemode="tozero"),
         xaxis=dict(title=""),
@@ -70,25 +98,25 @@ def chart_daily_cost(df: pd.DataFrame) -> go.Figure:
     return style(fig)
 
 
-def chart_running_balance(df: pd.DataFrame) -> go.Figure:
-    """Cumulative paid − cost balance: positive = paid up / credit (charcoal),
-    negative = under-paid / debt (red). Hovers around the zero line."""
-    d = df.copy()
-    d["daily_net"] = d["paid_per_day_gbp"] - d["total_cost_gbp"]
-    d["balance"] = d["daily_net"].cumsum()
+def chart_running_balance(df_agg: pd.DataFrame, freq: str) -> go.Figure:
+    """Cumulative paid − cost balance, end-of-period. Black = paid up, red = under-paid."""
+    label = freq_label(freq)
+    d = df_agg.copy()
+    d["period_net"] = d["paid_gbp_period"] - d["total_cost_gbp"]
+    d["balance"] = d["period_net"].cumsum()
     colors = [C_TEXT if v >= 0 else C_DEBT for v in d["balance"]]
     fig = go.Figure(go.Bar(
         x=d["date"], y=d["balance"],
         marker_color=colors,
         hovertemplate=(
-            "%{x|%a %d %b %Y}<br>Balance: £%{y:.2f}<br>"
-            "Net today: £%{customdata:.3f}<extra></extra>"
+            "%{x|%d %b %Y}<br>Balance: £%{y:.2f}<br>"
+            "Net this period: £%{customdata:+.2f}<extra></extra>"
         ),
-        customdata=d["daily_net"],
+        customdata=d["period_net"],
     ))
     fig.add_hline(y=0, line_dash="dash", line_color=C_GRID, line_width=1)
     fig.update_layout(
-        title="Running balance — cumulative (paid − cost). Black = paid up · Red = under-paid",
+        title=f"{label} running balance — cumulative (paid − cost). Black = paid up · Red = under-paid",
         yaxis=dict(title="£"),
         xaxis=dict(title=""),
         height=380,
@@ -117,36 +145,6 @@ def chart_calendar_heatmap(df: pd.DataFrame) -> go.Figure:
         height=320,
         margin=dict(l=40, r=40, t=60, b=40),
         yaxis=dict(autorange="reversed"),
-    )
-    return style(fig)
-
-
-def chart_monthly(df: pd.DataFrame) -> go.Figure:
-    """Monthly total L + cost. Useful given the 2+ year history."""
-    monthly = df.set_index("date").resample("MS").agg(
-        cons_l=("cons_l", "sum"),
-        total_cost_gbp=("total_cost_gbp", "sum"),
-    ).reset_index()
-    fig = go.Figure()
-    fig.add_bar(
-        x=monthly["date"], y=monthly["cons_l"], name="Litres",
-        marker_color=C_WATER,
-        hovertemplate="%{x|%b %Y}<br>%{y:,.0f} L<extra></extra>",
-    )
-    fig.add_scatter(
-        x=monthly["date"], y=monthly["total_cost_gbp"], name="Cost £",
-        yaxis="y2",
-        mode="lines+markers", line=dict(color=C_KWH, width=2),
-        hovertemplate="%{x|%b %Y}<br>£%{y:,.2f}<extra></extra>",
-    )
-    fig.update_layout(
-        title="Monthly total — L (bars) and cost £ (line)",
-        yaxis=dict(title="Litres", rangemode="tozero"),
-        yaxis2=dict(title="£", overlaying="y", side="right", rangemode="tozero", showgrid=False),
-        xaxis=dict(title=""),
-        legend=dict(orientation="h", y=-0.15),
-        height=360,
-        margin=dict(l=40, r=40, t=60, b=40),
     )
     return style(fig)
 
@@ -199,6 +197,8 @@ with st.sidebar:
     )
     start_d, end_d = dr if isinstance(dr, tuple) and len(dr) == 2 else (min_d, max_d)
 
+    freq = freq_selector("water")
+
     st.caption(f"Data: {min_d} → {max_d}  ·  {len(df):,} daily readings")
 
 mask = (df["date"].dt.date >= start_d) & (df["date"].dt.date <= end_d)
@@ -229,17 +229,16 @@ c5.metric("Paid (DD)", f"£{total_paid:,.2f}",
 c6.metric("Latest day", f"{latest_row['cons_l']:,.0f} L · £{latest_row['total_cost_gbp']:.2f}",
           help=f"on {latest_row['date']:%a %d %b %Y}")
 
-st.plotly_chart(chart_daily_volume(dfw), use_container_width=True)
-st.plotly_chart(chart_daily_cost(dfw), use_container_width=True)
-st.plotly_chart(chart_running_balance(dfw), use_container_width=True)
+df_agg = _aggregate(dfw, freq)
+st.plotly_chart(chart_volume(df_agg, freq), use_container_width=True)
+st.plotly_chart(chart_cost(df_agg, freq), use_container_width=True)
+st.plotly_chart(chart_running_balance(df_agg, freq), use_container_width=True)
 
 col_a, col_b = st.columns([1, 1])
 with col_a:
     st.plotly_chart(chart_calendar_heatmap(dfw), use_container_width=True)
 with col_b:
-    st.plotly_chart(chart_monthly(dfw), use_container_width=True)
-
-st.plotly_chart(chart_weekday_avg(dfw), use_container_width=True)
+    st.plotly_chart(chart_weekday_avg(dfw), use_container_width=True)
 
 # ---------- per-day breakdown table ----------
 st.subheader("Daily breakdown (most recent 30 days)")
