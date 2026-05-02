@@ -9,7 +9,10 @@ import streamlit as st
 
 from lib import (
     C_ENERGY, C_KWH, C_TEMP_MEAN, C_WATER,
-    load_energy, load_motion, load_tariffs, load_temperature, load_water, join_cost,
+    derive_dd_timeline, derive_water_tariff_history,
+    join_cost, join_water_cost,
+    load_energy, load_motion, load_tariffs, load_temperature,
+    load_water, load_water_tariffs,
 )
 
 
@@ -40,8 +43,14 @@ energy_raw = load_energy()
 tariffs = load_tariffs()
 temp = load_temperature()
 motion = load_motion()
-water = load_water()
+water_raw = load_water()
+water_tc = load_water_tariffs()
 energy = join_cost(energy_raw, tariffs).assign(d=lambda x: x["start"].dt.date)
+water = join_water_cost(
+    water_raw,
+    derive_water_tariff_history(water_tc),
+    derive_dd_timeline(water_tc),
+)
 
 # ---------- compute KPIs ----------
 # Indoor temp: latest reading, delta vs same hour yesterday
@@ -81,22 +90,17 @@ prior_m = motion[motion["date"].isin(prior_m_dates)].groupby("date").size()
 avg_motion = float(prior_m.mean()) if not prior_m.empty else None
 motion_delta = motion_today - avg_motion if avg_motion is not None else None
 
-# Baseload: mean overnight slot over the last 7 *complete* days, scaled to a full day
-recent_e_dates = complete_days[-7:]
-baseload_slot = energy_raw[
-    energy_raw["date"].isin(recent_e_dates)
-    & (energy_raw["hhmm"] >= "01:00")
-    & (energy_raw["hhmm"] <= "04:30")
-]["kwh"].mean()
-baseload = float(baseload_slot * 48) if pd.notna(baseload_slot) else 0.0
-
-# Water: latest day's L + delta vs prior-7-day avg (water is daily-grain, one row per day)
+# Water: latest day's L + cost, with deltas vs prior-7-day avg
 today_w = water["date"].max().date()
-water_today = float(water.loc[water["date"].dt.date == today_w, "cons_l"].sum())
+today_w_row = water[water["date"].dt.date == today_w].iloc[0]
+water_today = float(today_w_row["cons_l"])
+water_today_cost = float(today_w_row["total_cost_gbp"])
 prior_w_dates = pd.to_datetime([today_w - timedelta(days=i) for i in range(1, 8)])
-prior_w = water[water["date"].isin(prior_w_dates)]["cons_l"]
-avg_water = float(prior_w.mean()) if not prior_w.empty else None
-water_delta = water_today - avg_water if avg_water is not None else None
+prior_w = water[water["date"].isin(prior_w_dates)]
+avg_water_l = float(prior_w["cons_l"].mean()) if not prior_w.empty else None
+avg_water_cost = float(prior_w["total_cost_gbp"].mean()) if not prior_w.empty else None
+water_delta = water_today - avg_water_l if avg_water_l is not None else None
+water_cost_delta = water_today_cost - avg_water_cost if avg_water_cost is not None else None
 
 # Last reading across all four sources
 last_updated = max(energy["start"].max(), temp["ts"].max(), motion["ts"].max(), water["date"].max())
@@ -137,9 +141,11 @@ c5.metric(
     delta_color="inverse",
 )
 c6.metric(
-    "Baseload",
-    f"{baseload:.2f} kWh/day",
-    help="Mean overnight (01:00–04:30) draw scaled to a full day, last 7 days.",
+    f"Water cost — {today_w:%d %b}",
+    f"£{water_today_cost:.2f}",
+    f"£{water_cost_delta:+.2f} vs 7d avg" if water_cost_delta is not None else None,
+    delta_color="inverse",
+    help="Calculated daily cost: fresh + waste + standing − rebate.",
 )
 
 # ---------- 14-day sparklines ----------

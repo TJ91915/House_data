@@ -1,7 +1,10 @@
 """House dashboard — multi-page entry point."""
 import streamlit as st
 
-from lib import load_energy, load_motion, load_tariffs, load_temperature, load_water
+from lib import (
+    load_energy, load_motion, load_tariffs, load_temperature,
+    load_water, load_water_tariffs,
+)
 
 st.set_page_config(page_title="House Dashboard", page_icon="🏠", layout="wide")
 
@@ -12,6 +15,7 @@ load_tariffs()
 load_temperature()
 load_motion()
 load_water()
+load_water_tariffs()
 
 pg = st.navigation([
     st.Page("views/summary.py", title="Summary", icon="🏠", default=True),

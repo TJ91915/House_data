@@ -1,6 +1,7 @@
 """Shared helpers for the multi-page House dashboard: auth, palette, chart styling, loaders."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import gspread
@@ -170,4 +171,171 @@ def join_cost(energy: pd.DataFrame, tariffs: pd.DataFrame) -> pd.DataFrame:
     out["cost_gbp"] = (out["energy_cost_p"] + out["standing_p_slot"]) / 100
     out["energy_gbp"] = out["energy_cost_p"] / 100
     out["standing_gbp"] = out["standing_p_slot"] / 100
+    return out
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner="Loading water tariffs…")
+def load_water_tariffs() -> pd.DataFrame:
+    """Read the `Tariff costs` tab. One row per bill or DD notice."""
+    ws = client().open_by_key(SHEET_ID_WATER).worksheet("Tariff costs")
+    rows = ws.get_all_values()
+    df = pd.DataFrame(rows[1:], columns=rows[0])
+    df["doc_date"] = pd.to_datetime(df["Document Date"], errors="coerce")
+    df["period_from"] = pd.to_datetime(df["Period From"], errors="coerce")
+    df["period_to"] = pd.to_datetime(df["Period To"], errors="coerce")
+    for col, alias in [
+        ("Volume (m³)", "volume_m3"),
+        ("Meter Read Start", "meter_start"),
+        ("Meter Read End", "meter_end"),
+        ("Fresh Water Rate (£/m³)", "fw_rate"),
+        ("Fresh Water Standing (£)", "fw_standing"),
+        ("Waste Water Rate (£/m³)", "ww_rate"),
+        ("Waste Water Standing (£)", "ww_standing"),
+        ("Drainage Rebate (£)", "rebate"),
+        ("Fresh Water Charge (£)", "fw_charge"),
+        ("Waste Water Charge (£)", "ww_charge"),
+        ("Monthly DD (£)", "monthly_dd"),
+        ("Total Charge (£)", "total_charge"),
+    ]:
+        df[alias] = pd.to_numeric(df[col], errors="coerce")
+    df["notes"] = df.get("Notes", "")
+    df["type"] = df["Type"]
+    return df
+
+
+def derive_water_tariff_history(tc: pd.DataFrame) -> pd.DataFrame:
+    """Build a rate-effective-from table from the Tariff costs rows.
+
+    Strategy:
+      • For each tariff year (Apr-Mar), pick the longest single-rate Usage Bill
+        and derive £/day standing charges from its period totals.
+      • Add a pre-2023-04-01 row from any 2022/23-rates bill.
+      • For tariff years where only split bills exist (typically the most-recent
+        year), record the rates from the split-bill notes and fall back to the
+        prior year's £/day standing charges.
+    """
+    bills = tc[tc["type"] == "Usage Bill"].dropna(subset=["period_from", "period_to"]).copy()
+    bills["period_days"] = (bills["period_to"] - bills["period_from"]).dt.days + 1
+    bills["is_single_rate"] = ~bills["notes"].fillna("").str.contains("Split-rate", regex=False)
+
+    def _tariff_year_start(d: pd.Timestamp) -> pd.Timestamp:
+        """The April-1 boundary that opens the tariff year containing `d`."""
+        return pd.Timestamp(d.year if d.month >= 4 else d.year - 1, 4, 1)
+
+    rows: list[dict] = []
+
+    # Single-rate bills → primary source for each tariff year
+    for year_start, grp in bills[bills["is_single_rate"]].groupby(
+        bills[bills["is_single_rate"]]["period_from"].apply(_tariff_year_start),
+    ):
+        canonical = grp.loc[grp["period_days"].idxmax()]
+        days = canonical["period_days"]
+        rows.append({
+            "valid_from": year_start,
+            "fw_rate": canonical["fw_rate"],
+            "ww_rate": canonical["ww_rate"],
+            "fw_standing_per_day": canonical["fw_standing"] / days,
+            "ww_standing_per_day": canonical["ww_standing"] / days,
+            "rebate_per_day": canonical["rebate"] / days,
+            "source": f"single-rate bill {canonical['Source File'][:8]} ({int(days)}d)",
+        })
+
+    # Pre-2023-04-01 row from any 2022/23 bill (first April user moved in mid-rate-year)
+    pre = bills[bills["period_to"] < pd.Timestamp(2023, 4, 1)]
+    if not pre.empty and not any(r["valid_from"] < pd.Timestamp(2023, 4, 1) for r in rows):
+        canonical = pre.loc[pre["period_days"].idxmax()]
+        days = canonical["period_days"]
+        rows.insert(0, {
+            "valid_from": pd.Timestamp(1970, 1, 1),
+            "fw_rate": canonical["fw_rate"],
+            "ww_rate": canonical["ww_rate"],
+            "fw_standing_per_day": canonical["fw_standing"] / days,
+            "ww_standing_per_day": canonical["ww_standing"] / days,
+            "rebate_per_day": canonical["rebate"] / days,
+            "source": f"pre-Apr-2023 ({canonical['Source File'][:8]}, {int(days)}d)",
+        })
+
+    # Split-rate bills can introduce new tariff years not yet covered (e.g. 2026/27)
+    for _, r in bills[~bills["is_single_rate"]].iterrows():
+        m = re.search(
+            r"Secondary period (\d{4}-\d{2}-\d{2})\s*[→→]\s*(\d{4}-\d{2}-\d{2}).*?"
+            r"FW £?([\d.]+)\s*/\s*WW £?([\d.]+)",
+            r["notes"] or "",
+        )
+        if not m:
+            continue
+        sec_from = pd.to_datetime(m.group(1))
+        if sec_from.month != 4 or sec_from.day != 1:
+            continue  # not a tariff transition
+        if any(h["valid_from"] == sec_from for h in rows):
+            continue  # already covered by a single-rate bill
+        prior = max((h for h in rows if h["valid_from"] < sec_from),
+                    key=lambda h: h["valid_from"], default=None)
+        if not prior:
+            continue
+        rows.append({
+            "valid_from": sec_from,
+            "fw_rate": float(m.group(3)),
+            "ww_rate": float(m.group(4)),
+            "fw_standing_per_day": prior["fw_standing_per_day"],
+            "ww_standing_per_day": prior["ww_standing_per_day"],
+            "rebate_per_day": prior["rebate_per_day"],
+            "source": f"split-bill rates; standing carried over from {prior['valid_from']:%Y-%m-%d}",
+        })
+
+    return pd.DataFrame(rows).sort_values("valid_from").reset_index(drop=True)
+
+
+def derive_dd_timeline(tc: pd.DataFrame) -> pd.DataFrame:
+    """Build a monthly-DD-effective-from table from Tariff costs rows.
+
+    Anchors each new monthly_dd value on its document_date — slight under-estimate of
+    the change-over date (real changes typically take effect 1-2 months later), but
+    accurate enough for a daily-paid approximation. Refines automatically when
+    new docs are added to the sheet.
+    """
+    rows = tc.dropna(subset=["doc_date", "monthly_dd"])
+    rows = rows[["doc_date", "monthly_dd"]].sort_values("doc_date").reset_index(drop=True)
+    # Collapse consecutive duplicates so we only keep change-points
+    rows["change"] = rows["monthly_dd"].ne(rows["monthly_dd"].shift())
+    rows = rows[rows["change"]].drop(columns="change").reset_index(drop=True)
+    return rows.rename(columns={"doc_date": "valid_from", "monthly_dd": "monthly_dd"})
+
+
+def join_water_cost(
+    water: pd.DataFrame,
+    history: pd.DataFrame,
+    dd_timeline: pd.DataFrame,
+) -> pd.DataFrame:
+    """Attach per-day water cost columns to each daily reading.
+
+    Each output row gets the rate + £/day standing applicable on its date,
+    plus calculated FW/WW subtotals, rebate, total cost, and an annualised
+    daily-DD-paid figure for reconciliation.
+    """
+    out = water.sort_values("date").copy()
+
+    # Tariff history join (rates + standing)
+    out = pd.merge_asof(
+        out, history.sort_values("valid_from"),
+        left_on="date", right_on="valid_from", direction="backward",
+    )
+
+    # Per-day cost components (assumes 100% return-to-sewer — bills consistently
+    # show waste-water m³ === fresh-water m³, no abatement)
+    out["fw_subtotal_gbp"] = out["cons_m3"] * out["fw_rate"] + out["fw_standing_per_day"]
+    out["ww_subtotal_gbp"] = (
+        out["cons_m3"] * out["ww_rate"] + out["ww_standing_per_day"] - out["rebate_per_day"]
+    )
+    out["total_cost_gbp"] = out["fw_subtotal_gbp"] + out["ww_subtotal_gbp"]
+
+    # Daily share of monthly DD (annualised so it's stable across months)
+    dd_join = pd.merge_asof(
+        out[["date"]],
+        dd_timeline.sort_values("valid_from"),
+        left_on="date", right_on="valid_from", direction="backward",
+    )
+    out["monthly_dd"] = dd_join["monthly_dd"].values
+    out["paid_per_day_gbp"] = out["monthly_dd"] * 12 / 365
+
     return out
