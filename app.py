@@ -2,7 +2,7 @@
 import streamlit as st
 
 from lib import (
-    load_energy, load_hot_water, load_hot_water_dd,
+    load_energy, load_eon_bills, load_hot_water, load_hot_water_dd,
     load_motion, load_tariffs, load_temperature,
     load_water, load_water_tariffs,
 )
@@ -19,6 +19,7 @@ load_water()
 load_water_tariffs()
 load_hot_water()
 load_hot_water_dd()
+load_eon_bills()
 
 pg = st.navigation([
     st.Page("views/summary.py", title="Summary", icon="🏠", default=True),

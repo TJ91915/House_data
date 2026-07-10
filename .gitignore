@@ -17,10 +17,14 @@ _parse_bills.py
 populate_tariff_costs.py
 populate_water_costs.py
 populate_hot_water_dd.py
+populate_eon_bills.py
+_extract_eon_balances.py
 
 # personal data (bills, intermediate parses)
 bills/
 bills_parsed.json
+e.on_bills/
+eon_bills_parsed.json
 
 # personal notes
 tasks/

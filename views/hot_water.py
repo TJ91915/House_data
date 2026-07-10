@@ -14,8 +14,8 @@ import streamlit as st
 from lib import (
     C_DEBT, C_GRID, C_HOT_WATER, C_KWH, C_ROLLING, C_STANDING, C_TEXT,
     HEAT_SCALE_HOT_WATER,
-    freq_label, freq_selector, join_hot_water_paid,
-    load_hot_water, load_hot_water_dd, style,
+    build_daily_balance, freq_label, freq_selector, join_hot_water_paid,
+    load_eon_bills, load_hot_water, load_hot_water_dd, style,
 )
 
 
@@ -97,24 +97,56 @@ def chart_cost(df_agg: pd.DataFrame, freq: str) -> go.Figure:
     return style(fig)
 
 
-def chart_running_balance(df_agg: pd.DataFrame, freq: str) -> go.Figure:
-    label = freq_label(freq)
-    d = df_agg.copy()
-    d["period_net"] = d["paid_gbp_period"] - d["total_cost_gbp"]
-    d["balance"] = d["period_net"].cumsum()
-    colors = [C_TEXT if v >= 0 else C_DEBT for v in d["balance"]]
-    fig = go.Figure(go.Bar(
-        x=d["date"], y=d["balance"],
-        marker_color=colors,
+def chart_running_balance(daily: pd.DataFrame, bills: pd.DataFrame) -> go.Figure:
+    """Plot the real account balance anchored to E.on bill `new_balance` values.
+
+    Convention follows E.on bills: positive = owing (red), negative = in credit
+    (green/black). Bill dates marked with dots so it's obvious where the chart
+    is fact (anchor) vs interpolation (between anchors).
+    """
+    d = daily.copy()
+    # Balance line — break into segments above/below zero for two-tone colouring
+    fig = go.Figure()
+    fig.add_scatter(
+        x=d["date"], y=d["balance_gbp"],
+        mode="lines", line=dict(color=C_DEBT, width=2),
+        name="Balance",
+        hovertemplate="%{x|%d %b %Y}<br>Balance: £%{y:.2f}<extra></extra>",
+    )
+    # Credit-zone shading (when balance < 0) — overlay a second trace clipped to <= 0
+    credit_y = d["balance_gbp"].where(d["balance_gbp"] <= 0)
+    fig.add_scatter(
+        x=d["date"], y=credit_y,
+        mode="lines", line=dict(color=C_TEXT, width=2),
+        name="In credit",
+        hovertemplate="%{x|%d %b %Y}<br>Credit: £%{y:.2f}<extra></extra>",
+    )
+    # Bill anchors — one marker per actual statement
+    anchors = d[d["is_bill_anchor"]]
+    fig.add_scatter(
+        x=anchors["date"], y=anchors["balance_gbp"],
+        mode="markers",
+        marker=dict(color=C_HOT_WATER, size=7, line=dict(color="white", width=1)),
+        name="E.on bill",
         hovertemplate=(
-            "%{x|%d %b %Y}<br>Balance: £%{y:.2f}<br>"
-            "Net this period: £%{customdata:+.2f}<extra></extra>"
+            "%{x|%d %b %Y}<br>Bill balance: £%{y:.2f}"
+            "<extra>statement</extra>"
         ),
-        customdata=d["period_net"],
-    ))
+    )
     fig.add_hline(y=0, line_dash="dash", line_color=C_GRID, line_width=1)
+    final = d.iloc[-1]
+    final_label = (
+        f"in debit £{final['balance_gbp']:.2f}"
+        if final["balance_gbp"] > 0 else
+        f"in credit £{-final['balance_gbp']:.2f}"
+    )
+    n_bills = int(d["is_bill_anchor"].sum())
     fig.update_layout(
-        title=f"{label} running balance — cumulative (paid − cost). Black = paid up · Red = under-paid",
+        title=(
+            f"Account balance — anchored to {n_bills} E.on statements. "
+            f"Red above £0 = owing · Black below £0 = in credit. "
+            f"Latest: {final_label}"
+        ),
         yaxis=dict(title="£"),
         xaxis=dict(title=""),
         height=380,
@@ -181,6 +213,7 @@ with st.sidebar:
 
     raw = load_hot_water()
     dd = load_hot_water_dd()
+    bills = load_eon_bills()
     df = join_hot_water_paid(raw, dd)
 
     min_d = df["date"].min().date()
@@ -208,9 +241,9 @@ if dfw.empty:
 n_days = len(dfw)
 total_kwh = float(dfw["kwh_used"].sum())
 total_cost = float(dfw["total_cost_gbp"].sum())
-total_paid = float(dfw["paid_per_day_gbp"].sum())
 max_row = dfw.loc[dfw["kwh_used"].idxmax()]
 latest_row = dfw.iloc[-1]
+latest_bill = bills.iloc[-1] if not bills.empty else None
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Total kWh", f"{total_kwh:,.0f}",
@@ -218,16 +251,25 @@ c1.metric("Total kWh", f"{total_kwh:,.0f}",
 c2.metric("Avg kWh/day", f"{total_kwh / n_days:,.1f}")
 c3.metric("Total cost", f"£{total_cost:,.2f}")
 c4.metric("Avg £/day", f"£{total_cost / n_days:.2f}")
-c5.metric("Paid (DD)", f"£{total_paid:,.2f}",
-          help="Annualised daily share of monthly DD across the window. "
-               "Diff vs Total cost = the credit/debt building up.")
+if latest_bill is not None:
+    bal = float(latest_bill["new_balance"])
+    label = f"£{bal:.2f} owing" if bal > 0 else f"£{-bal:.2f} in credit"
+    c5.metric("Account balance", label,
+              help=f"From E.on statement {latest_bill['doc_date']:%d %b %Y}. "
+                   "Authoritative — taken straight from the bill.")
+else:
+    c5.metric("Account balance", "—", help="No E.on bills parsed yet.")
 c6.metric("Latest day", f"{latest_row['kwh_used']:,.1f} kWh · £{latest_row['total_cost_gbp']:.2f}",
           help=f"on {latest_row['date']:%a %d %b %Y}")
 
 df_agg = _aggregate(dfw, freq)
 st.plotly_chart(chart_volume(df_agg, freq), use_container_width=True)
 st.plotly_chart(chart_cost(df_agg, freq), use_container_width=True)
-st.plotly_chart(chart_running_balance(df_agg, freq), use_container_width=True)
+
+# Running balance uses the full daily history (not the aggregated frame) and
+# the bill anchors. Filter to the selected date range for visual consistency.
+daily_bal = build_daily_balance(dfw, bills)
+st.plotly_chart(chart_running_balance(daily_bal, bills), use_container_width=True)
 
 col_a, col_b = st.columns([1, 1])
 with col_a:

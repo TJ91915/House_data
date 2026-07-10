@@ -422,3 +422,93 @@ def join_hot_water_paid(hw: pd.DataFrame, dd_timeline: pd.DataFrame) -> pd.DataF
         out["monthly_dd"] = joined["monthly_dd"].fillna(0).values
     out["paid_per_day_gbp"] = out["monthly_dd"] * 12 / 365
     return out
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner="Loading E.on bills…")
+def load_eon_bills() -> pd.DataFrame:
+    """Read the `Bills` tab — one row per parsed E.on statement, with the
+    authoritative `balance_brought_forward / charges_this_time / new_balance`
+    trio from each bill plus derived per-period payments.
+    """
+    ws = client().open_by_key(SHEET_ID_HOT_WATER).worksheet("Bills")
+    rows = ws.get_all_values()
+    df = pd.DataFrame(rows[1:], columns=[c.strip() for c in rows[0]])
+    df["doc_date"] = pd.to_datetime(df["Doc Date"], errors="coerce")
+    df["period_from"] = pd.to_datetime(df["Period From"], errors="coerce")
+    df["period_to"] = pd.to_datetime(df["Period To"], errors="coerce")
+    for col, alias in [
+        ("Balance Brought Forward (£)", "balance_brought_forward"),
+        ("Charges This Time (£)", "charges_this_time"),
+        ("New Balance (£)", "new_balance"),
+        ("kWh", "kwh"),
+        ("Unit Rate (p/kWh)", "unit_rate_p"),
+        ("Service Days", "service_days"),
+        ("Service Charge (p/day)", "service_p_day"),
+    ]:
+        df[alias] = pd.to_numeric(df[col], errors="coerce")
+    df = df.dropna(subset=["doc_date", "new_balance"]).sort_values("doc_date").reset_index(drop=True)
+    # Payment made between consecutive bills = prev new_balance - this brought_forward.
+    # First bill: brought_forward is £0, so payment = 0 (no prior bill).
+    df["payment_gbp"] = (df["new_balance"].shift(1) - df["balance_brought_forward"]).fillna(0.0)
+    return df[[
+        "doc_date", "period_from", "period_to",
+        "balance_brought_forward", "charges_this_time", "new_balance",
+        "payment_gbp", "kwh", "unit_rate_p", "service_days", "service_p_day",
+    ]]
+
+
+def build_daily_balance(hw: pd.DataFrame, bills: pd.DataFrame) -> pd.DataFrame:
+    """Reconstruct a daily-grain account balance series anchored to E.on bills.
+
+    Strategy:
+      • At each bill's `doc_date`, balance == `new_balance` (authoritative).
+      • Between bills, distribute each bill's derived `payment_gbp` evenly
+        across the days from the prior bill's doc_date → this bill's doc_date.
+        This smooths the line vs attributing each payment to a single day.
+      • Before the first bill: linear from 0 → bill[0].new_balance.
+      • After the last bill: extend forward using daily cost only (no more
+        payments yet — chart projects the balance until the next bill arrives).
+
+    Returns one row per date in `hw` with columns:
+      `date`, `total_cost_gbp`, `payment_gbp`, `balance_gbp`, `is_bill_anchor`.
+    """
+    out = hw[["date", "total_cost_gbp"]].copy().sort_values("date").reset_index(drop=True)
+
+    if bills.empty:
+        out["payment_gbp"] = 0.0
+        out["balance_gbp"] = out["total_cost_gbp"].cumsum()
+        out["is_bill_anchor"] = False
+        return out
+
+    bills = bills.sort_values("doc_date").reset_index(drop=True)
+    bill_dates = bills["doc_date"].dt.normalize().tolist()
+    anchors = dict(zip(bill_dates, bills["new_balance"]))
+
+    # Per-day payment share: each bill's payment is spread over the days from
+    # the prior bill's doc_date (exclusive) up to and including this bill's doc_date.
+    # First bill has payment £0 by definition (no prior bill).
+    out["payment_gbp"] = 0.0
+    dates_norm = out["date"].dt.normalize()
+    for i in range(1, len(bills)):
+        prev_dt = bill_dates[i - 1]
+        this_dt = bill_dates[i]
+        pay = float(bills.iloc[i]["payment_gbp"])
+        mask = (dates_norm > prev_dt) & (dates_norm <= this_dt)
+        n = int(mask.sum())
+        if n > 0 and pay:
+            out.loc[mask, "payment_gbp"] = pay / n
+
+    out["is_bill_anchor"] = dates_norm.isin(anchors)
+
+    # Walk forward: snap to anchor on bill days, otherwise accumulate cost - payment.
+    balance: list[float] = []
+    running = 0.0
+    for _, r in out.iterrows():
+        d = r["date"].normalize()
+        if d in anchors:
+            running = float(anchors[d])
+        else:
+            running += float(r["total_cost_gbp"]) - float(r["payment_gbp"])
+        balance.append(running)
+    out["balance_gbp"] = balance
+    return out
