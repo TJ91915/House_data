@@ -14,8 +14,8 @@ import streamlit as st
 from lib import (
     C_DEBT, C_GRID, C_HOT_WATER, C_KWH, C_ROLLING, C_STANDING, C_TEXT,
     HEAT_SCALE_HOT_WATER,
-    build_daily_balance, freq_label, freq_selector, join_hot_water_paid,
-    load_eon_bills, load_hot_water, load_hot_water_dd, style,
+    build_daily_balance, chart_year_over_year, freq_label, freq_selector,
+    join_hot_water_paid, load_eon_bills, load_hot_water, load_hot_water_dd, style,
 )
 
 
@@ -264,6 +264,10 @@ c6.metric("Latest day", f"{latest_row['kwh_used']:,.1f} kWh · £{latest_row['to
 
 df_agg = _aggregate(dfw, freq)
 st.plotly_chart(chart_volume(df_agg, freq), use_container_width=True)
+st.plotly_chart(
+    chart_year_over_year(dfw, "kwh_used", freq),
+    use_container_width=True,
+)
 st.plotly_chart(chart_cost(df_agg, freq), use_container_width=True)
 
 # Running balance uses the full daily history (not the aggregated frame) and

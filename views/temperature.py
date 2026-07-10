@@ -9,7 +9,7 @@ import streamlit as st
 
 from lib import (
     C_TEMP_MIN, C_TEMP_MEAN, C_TEMP_MAX, C_TEMP_RIBBON, HEAT_SCALE_TEMP,
-    freq_label, freq_selector, load_temperature, style,
+    chart_year_over_year, freq_label, freq_selector, load_temperature, style,
 )
 
 
@@ -183,6 +183,14 @@ c4.metric("7-day avg", f"{avg_7d:.1f} °C")
 # Charts
 d_period = period_stats(dfw, freq=freq)
 st.plotly_chart(chart_ribbon(d_period, freq), use_container_width=True)
+
+# Year-over-year: mean °C per bucket, one line per year
+daily_mean = dfw.groupby("date", as_index=False)["temp_c"].mean()
+daily_mean["date"] = pd.to_datetime(daily_mean["date"])
+st.plotly_chart(
+    chart_year_over_year(daily_mean, "temp_c", freq, agg="mean", unit="°C", value_fmt=".2f"),
+    use_container_width=True,
+)
 
 col_a, col_b = st.columns([1, 1])
 with col_a:

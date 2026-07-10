@@ -7,7 +7,7 @@ import streamlit as st
 
 from lib import (
     C_ENERGY, C_STANDING, C_KWH, C_ROLLING, C_TEMP_MIN, C_TEMP_MEAN, C_TEMP_MAX,
-    freq_label, freq_selector, load_motion, style,
+    chart_year_over_year, freq_label, freq_selector, load_motion, style,
 )
 
 DOW_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -117,3 +117,14 @@ c4.metric("Busiest weekday", DOW_LABELS[busiest_weekday],
 
 st.plotly_chart(chart_hour_by_weekday(dfw), use_container_width=True)
 st.plotly_chart(chart_events_per_period(dfw, freq), use_container_width=True)
+
+# Year-over-year: events per bucket, one line per year. Resample fills
+# event-free days with 0 so quiet days count as quiet, not missing.
+daily_events = (
+    dfw.set_index("ts").resample("D").size().rename("events").reset_index()
+    .rename(columns={"ts": "date"})
+)
+st.plotly_chart(
+    chart_year_over_year(daily_events, "events", freq, unit="events", value_fmt=",.0f"),
+    use_container_width=True,
+)

@@ -101,6 +101,74 @@ def style(fig: go.Figure) -> go.Figure:
     return fig
 
 
+# ---------- shared year-over-year chart ----------
+# One colour per year, oldest first (cycles if the data ever spans more years).
+C_YEAR_SEQ = [C_TEMP_MIN, C_ENERGY, C_ROLLING, C_KWH]
+
+
+def chart_year_over_year(
+    df_daily: pd.DataFrame,
+    value_col: str,
+    freq: str,
+    *,
+    agg: str = "sum",
+    unit: str = "kWh",
+    value_fmt: str = ",.1f",
+) -> go.Figure:
+    """One line per calendar year overlaid on a shared Jan–Dec axis.
+
+    Expects a daily-grain frame: one row per date, `date` as datetime64.
+    Buckets follow the aggregation radio (`freq`); `agg` is "sum" for
+    quantities (kWh, litres, events) or "mean" for levels (°C). Yearly
+    aggregation would collapse each line to a single point, so it renders
+    one bar per year instead.
+    """
+    d = df_daily[["date", value_col]].copy()
+    d["year"] = d["date"].dt.year
+    agg_word = "Total" if agg == "sum" else "Average"
+
+    if freq == "YS":
+        totals = d.groupby("year")[value_col].agg(agg).reset_index()
+        fig = go.Figure(go.Bar(
+            x=totals["year"].astype(str), y=totals[value_col],
+            marker=dict(color=[C_YEAR_SEQ[i % len(C_YEAR_SEQ)] for i in range(len(totals))]),
+            hovertemplate="%{x}<br>%{y:" + value_fmt + "} " + unit + "<extra></extra>",
+        ))
+        fig.update_layout(
+            title=f"{agg_word} {unit} per year",
+            yaxis=dict(title=unit, rangemode="tozero" if agg == "sum" else "normal"),
+            xaxis=dict(title="", type="category"),
+            height=380,
+            margin=dict(l=40, r=40, t=60, b=40),
+        )
+        return style(fig)
+
+    # Re-anchor every date to the (leap) year 2000 so 29 Feb survives and the
+    # years share one x-axis, then bucket per the aggregation radio.
+    d["x"] = d["date"].map(lambda t: t.replace(year=2000))
+    fig = go.Figure()
+    for i, (year, grp) in enumerate(d.groupby("year")):
+        if freq == "D":
+            s = grp[["x", value_col]].sort_values("x")
+        else:
+            s = grp.set_index("x")[value_col].resample(freq).agg(agg).reset_index()
+        fig.add_scatter(
+            x=s["x"], y=s[value_col], name=str(year),
+            mode="lines", line=dict(color=C_YEAR_SEQ[i % len(C_YEAR_SEQ)], width=2),
+            hovertemplate="%{x|%d %b}<br>%{y:" + value_fmt + "} " + unit
+                          + "<extra>" + str(year) + "</extra>",
+        )
+    fig.update_layout(
+        title=f"{freq_label(freq)} {unit} — year over year",
+        yaxis=dict(title=unit, rangemode="tozero" if agg == "sum" else "normal"),
+        xaxis=dict(title="", tickformat="%b", dtick="M1"),
+        legend=dict(orientation="h", y=-0.15),
+        height=420,
+        margin=dict(l=40, r=40, t=60, b=40),
+    )
+    return style(fig)
+
+
 # ---------- data loaders (cached, shared across pages) ----------
 @st.cache_data(ttl=CACHE_TTL, show_spinner="Loading energy data…")
 def load_energy() -> pd.DataFrame:

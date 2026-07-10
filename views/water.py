@@ -7,7 +7,7 @@ import streamlit as st
 
 from lib import (
     C_DEBT, C_GRID, C_KWH, C_ROLLING, C_STANDING, C_TEXT, C_WATER, HEAT_SCALE_WATER,
-    derive_dd_timeline, derive_water_tariff_history,
+    chart_year_over_year, derive_dd_timeline, derive_water_tariff_history,
     freq_label, freq_selector,
     join_water_cost, load_water, load_water_tariffs, style,
 )
@@ -231,6 +231,10 @@ c6.metric("Latest day", f"{latest_row['cons_l']:,.0f} L · £{latest_row['total_
 
 df_agg = _aggregate(dfw, freq)
 st.plotly_chart(chart_volume(df_agg, freq), use_container_width=True)
+st.plotly_chart(
+    chart_year_over_year(dfw, "cons_l", freq, unit="L", value_fmt=",.0f"),
+    use_container_width=True,
+)
 st.plotly_chart(chart_cost(df_agg, freq), use_container_width=True)
 st.plotly_chart(chart_running_balance(df_agg, freq), use_container_width=True)
 
