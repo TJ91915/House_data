@@ -252,12 +252,15 @@ c2.metric("Avg kWh/day", f"{total_kwh / n_days:,.1f}")
 c3.metric("Total cost", f"£{total_cost:,.2f}")
 c4, c5, c6 = st.columns(3)
 c4.metric("Avg £/day", f"£{total_cost / n_days:.2f}")
+# Balance series feeds both the KPI (today's projected position) and the chart.
+daily_bal = build_daily_balance(dfw, bills)
 if latest_bill is not None:
-    bal = float(latest_bill["new_balance"])
+    bal = float(daily_bal.iloc[-1]["balance_gbp"])
     label = f"£{bal:.2f} owing" if bal > 0 else f"£{-bal:.2f} in credit"
     c5.metric("Account balance", label,
-              help=f"From E.on statement {latest_bill['doc_date']:%d %b %Y}. "
-                   "Authoritative — taken straight from the bill.")
+              help=f"Projected to {daily_bal.iloc[-1]['date']:%d %b %Y}: last statement "
+                   f"(£{float(latest_bill['new_balance']):.2f} on "
+                   f"{latest_bill['doc_date']:%d %b %Y}) plus heat used minus DD paid since.")
 else:
     c5.metric("Account balance", "—", help="No E.on bills parsed yet.")
 c6.metric("Latest day", f"{latest_row['kwh_used']:,.1f} kWh · £{latest_row['total_cost_gbp']:.2f}",
@@ -272,8 +275,7 @@ st.plotly_chart(
 st.plotly_chart(chart_cost(df_agg, freq), use_container_width=True)
 
 # Running balance uses the full daily history (not the aggregated frame) and
-# the bill anchors. Filter to the selected date range for visual consistency.
-daily_bal = build_daily_balance(dfw, bills)
+# the bill anchors — same series the Account balance KPI reads from.
 st.plotly_chart(chart_running_balance(daily_bal, bills), use_container_width=True)
 
 col_a, col_b = st.columns([1, 1])
