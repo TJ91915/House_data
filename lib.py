@@ -534,19 +534,25 @@ def build_daily_balance(hw: pd.DataFrame, bills: pd.DataFrame) -> pd.DataFrame:
         across the days from the prior bill's doc_date → this bill's doc_date.
         This smooths the line vs attributing each payment to a single day.
       • Before the first bill: linear from 0 → bill[0].new_balance.
-      • After the last bill: extend forward using daily cost only (no more
-        payments yet — chart projects the balance until the next bill arrives).
+      • After the last bill: project forward using daily cost minus the daily
+        DD share (`paid_per_day_gbp`, when present) — the DD keeps being paid
+        even though no statement has confirmed it yet.
 
     Returns one row per date in `hw` with columns:
       `date`, `total_cost_gbp`, `payment_gbp`, `balance_gbp`, `is_bill_anchor`.
     """
-    out = hw[["date", "total_cost_gbp"]].copy().sort_values("date").reset_index(drop=True)
+    cols = ["date", "total_cost_gbp"]
+    if "paid_per_day_gbp" in hw.columns:
+        cols.append("paid_per_day_gbp")
+    out = hw[cols].copy().sort_values("date").reset_index(drop=True)
+    if "paid_per_day_gbp" not in out.columns:
+        out["paid_per_day_gbp"] = 0.0
 
     if bills.empty:
-        out["payment_gbp"] = 0.0
-        out["balance_gbp"] = out["total_cost_gbp"].cumsum()
+        out["payment_gbp"] = out["paid_per_day_gbp"]
+        out["balance_gbp"] = (out["total_cost_gbp"] - out["payment_gbp"]).cumsum()
         out["is_bill_anchor"] = False
-        return out
+        return out.drop(columns="paid_per_day_gbp")
 
     bills = bills.sort_values("doc_date").reset_index(drop=True)
     bill_dates = bills["doc_date"].dt.normalize().tolist()
@@ -566,6 +572,11 @@ def build_daily_balance(hw: pd.DataFrame, bills: pd.DataFrame) -> pd.DataFrame:
         if n > 0 and pay:
             out.loc[mask, "payment_gbp"] = pay / n
 
+    # After the last bill no statement confirms a payment yet, but the DD keeps
+    # going out — project with the daily DD share instead of cost-only.
+    after_last = dates_norm > bill_dates[-1]
+    out.loc[after_last, "payment_gbp"] = out.loc[after_last, "paid_per_day_gbp"]
+
     out["is_bill_anchor"] = dates_norm.isin(anchors)
 
     # Walk forward: snap to anchor on bill days, otherwise accumulate cost - payment.
@@ -579,4 +590,4 @@ def build_daily_balance(hw: pd.DataFrame, bills: pd.DataFrame) -> pd.DataFrame:
             running += float(r["total_cost_gbp"]) - float(r["payment_gbp"])
         balance.append(running)
     out["balance_gbp"] = balance
-    return out
+    return out.drop(columns="paid_per_day_gbp")
