@@ -530,14 +530,13 @@ def build_daily_balance(hw: pd.DataFrame, bills: pd.DataFrame) -> pd.DataFrame:
 
     Strategy:
       • At each bill's `doc_date`, balance == `new_balance` (authoritative).
-      • Usage cost accrues daily; each bill's derived `payment_gbp` lands as
-        one discrete drop on the 1st of the month — every parsed statement
-        shows the DD credited on the 1st (or next working day), so the true
-        balance saw-tooths rather than gliding.
+      • Between bills, distribute each bill's derived `payment_gbp` evenly
+        across the days from the prior bill's doc_date → this bill's doc_date.
+        This smooths the line vs attributing each payment to a single day.
       • Before the first bill: linear from 0 → bill[0].new_balance.
-      • After the last bill: project forward the same way — daily cost, with
-        the monthly DD (recovered from `paid_per_day_gbp`, when present)
-        dropping on each 1st.
+      • After the last bill: project forward using daily cost minus the daily
+        DD share (`paid_per_day_gbp`, when present) — the DD keeps being paid
+        even though no statement has confirmed it yet.
 
     Returns one row per date in `hw` with columns:
       `date`, `total_cost_gbp`, `payment_gbp`, `balance_gbp`, `is_bill_anchor`.
@@ -559,9 +558,8 @@ def build_daily_balance(hw: pd.DataFrame, bills: pd.DataFrame) -> pd.DataFrame:
     bill_dates = bills["doc_date"].dt.normalize().tolist()
     anchors = dict(zip(bill_dates, bills["new_balance"]))
 
-    # Each statement-gap's payment lands as one drop on the first 1st-of-month
-    # after the previous statement (all 39 parsed bills show the DD credited on
-    # the 1st, weekend-shifted at most 2 days — invisible at chart scale).
+    # Per-day payment share: each bill's payment is spread over the days from
+    # the prior bill's doc_date (exclusive) up to and including this bill's doc_date.
     # First bill has payment £0 by definition (no prior bill).
     out["payment_gbp"] = 0.0
     dates_norm = out["date"].dt.normalize()
@@ -569,27 +567,15 @@ def build_daily_balance(hw: pd.DataFrame, bills: pd.DataFrame) -> pd.DataFrame:
         prev_dt = bill_dates[i - 1]
         this_dt = bill_dates[i]
         pay = float(bills.iloc[i]["payment_gbp"])
-        if not pay:
-            continue
-        pay_date = prev_dt + pd.offsets.MonthBegin(1)
-        on_day = dates_norm == pay_date
-        if pay_date <= this_dt and on_day.any():
-            out.loc[on_day, "payment_gbp"] += pay
-        else:
-            # No daily reading on that 1st (data gap) — fall back to an even
-            # spread across the statement gap; the next anchor corrects any drift.
-            gap = (dates_norm > prev_dt) & (dates_norm <= this_dt)
-            n = int(gap.sum())
-            if n:
-                out.loc[gap, "payment_gbp"] += pay / n
+        mask = (dates_norm > prev_dt) & (dates_norm <= this_dt)
+        n = int(mask.sum())
+        if n > 0 and pay:
+            out.loc[mask, "payment_gbp"] = pay / n
 
     # After the last bill no statement confirms a payment yet, but the DD keeps
-    # being collected on the 1st — keep the same discrete drops in the projection.
-    # paid_per_day_gbp is the annualised share (monthly_dd * 12 / 365); invert it
-    # to recover the monthly DD amount.
+    # going out — project with the daily DD share instead of cost-only.
     after_last = dates_norm > bill_dates[-1]
-    tail_dd = after_last & (dates_norm.dt.day == 1)
-    out.loc[tail_dd, "payment_gbp"] = out.loc[tail_dd, "paid_per_day_gbp"] * 365 / 12
+    out.loc[after_last, "payment_gbp"] = out.loc[after_last, "paid_per_day_gbp"]
 
     out["is_bill_anchor"] = dates_norm.isin(anchors)
 
