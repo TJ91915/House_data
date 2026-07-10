@@ -245,11 +245,12 @@ max_row = dfw.loc[dfw["kwh_used"].idxmax()]
 latest_row = dfw.iloc[-1]
 latest_bill = bills.iloc[-1] if not bills.empty else None
 
-c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1, c2, c3 = st.columns(3)
 c1.metric("Total kWh", f"{total_kwh:,.0f}",
           help=f"over {n_days} days")
 c2.metric("Avg kWh/day", f"{total_kwh / n_days:,.1f}")
 c3.metric("Total cost", f"£{total_cost:,.2f}")
+c4, c5, c6 = st.columns(3)
 c4.metric("Avg £/day", f"£{total_cost / n_days:.2f}")
 if latest_bill is not None:
     bal = float(latest_bill["new_balance"])

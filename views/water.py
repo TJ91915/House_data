@@ -216,12 +216,13 @@ total_paid = float(dfw["paid_per_day_gbp"].sum())
 max_row = dfw.loc[dfw["cons_l"].idxmax()]
 latest_row = dfw.iloc[-1]
 
-c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1, c2, c3 = st.columns(3)
 c1.metric("Total", f"{total_l:,.0f} L",
           help=f"{total_l / 1000:,.2f} m³ over {n_days} days")
 c2.metric("Avg L/day", f"{total_l / n_days:,.0f} L")
 c3.metric("Total cost", f"£{total_cost:,.2f}",
           help="Calculated cost: fresh + waste + standing − rebate, all at daily resolution.")
+c4, c5, c6 = st.columns(3)
 c4.metric("Avg £/day", f"£{total_cost / n_days:.2f}")
 c5.metric("Paid (DD)", f"£{total_paid:,.2f}",
           help=f"Annualised daily share of monthly DD over the {n_days} day window. "
