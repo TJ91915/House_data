@@ -10,9 +10,12 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from lib import (
-    C_ENERGY, C_STANDING, C_KWH, C_ROLLING, HEAT_SCALE,
+    C_ENERGY, C_STANDING, C_KWH, C_ROLLING, C_TEMP_MIN, HEAT_SCALE,
     style, load_energy, load_tariffs, join_cost,
 )
+
+# One colour per year for the year-over-year chart, oldest first (cycles if needed).
+C_YEAR_SEQ = [C_TEMP_MIN, C_ENERGY, C_ROLLING, C_KWH]
 
 
 # ---------- page-specific helpers ----------
@@ -61,6 +64,54 @@ def chart_daily(df_daily: pd.DataFrame, freq: str) -> go.Figure:
         yaxis=dict(title="£", rangemode="tozero"),
         yaxis2=dict(title="kWh", overlaying="y", side="right", rangemode="tozero", showgrid=False),
         xaxis=dict(title=""),
+        legend=dict(orientation="h", y=-0.15),
+        height=420,
+        margin=dict(l=40, r=40, t=60, b=40),
+    )
+    return style(fig)
+
+
+def chart_year_over_year(df_daily: pd.DataFrame, freq: str) -> go.Figure:
+    from lib import freq_label as _freq_label
+    d = df_daily.copy()
+    d["year"] = d["date"].dt.year
+    label = _freq_label(freq)
+
+    if freq == "YS":
+        # One line per year collapses to a single point — a bar per year reads better.
+        totals = d.groupby("year")["kwh"].sum().reset_index()
+        fig = go.Figure(go.Bar(
+            x=totals["year"].astype(str), y=totals["kwh"],
+            marker=dict(color=[C_YEAR_SEQ[i % len(C_YEAR_SEQ)] for i in range(len(totals))]),
+            hovertemplate="%{x}<br>%{y:,.0f} kWh<extra></extra>",
+        ))
+        fig.update_layout(
+            title="Total kWh per year",
+            yaxis=dict(title="kWh", rangemode="tozero"),
+            xaxis=dict(title="", type="category"),
+            height=380,
+            margin=dict(l=40, r=40, t=60, b=40),
+        )
+        return style(fig)
+
+    # Overlay each year on a shared Jan–Dec axis: re-anchor every date to the
+    # (leap) year 2000 so 29 Feb survives, then bucket per the aggregation radio.
+    d["x"] = d["date"].map(lambda t: t.replace(year=2000))
+    fig = go.Figure()
+    for i, (year, grp) in enumerate(d.groupby("year")):
+        if freq == "D":
+            s = grp[["x", "kwh"]].sort_values("x")
+        else:
+            s = grp.set_index("x")["kwh"].resample(freq).sum().reset_index()
+        fig.add_scatter(
+            x=s["x"], y=s["kwh"], name=str(year),
+            mode="lines", line=dict(color=C_YEAR_SEQ[i % len(C_YEAR_SEQ)], width=2),
+            hovertemplate="%{x|%d %b}<br>%{y:,.1f} kWh<extra>" + str(year) + "</extra>",
+        )
+    fig.update_layout(
+        title=f"{label} kWh — year over year",
+        yaxis=dict(title="kWh", rangemode="tozero"),
+        xaxis=dict(title="", tickformat="%b", dtick="M1"),
         legend=dict(orientation="h", y=-0.15),
         height=420,
         margin=dict(l=40, r=40, t=60, b=40),
@@ -210,6 +261,8 @@ c4.metric("Baseload", f"{baseload_kwh_per_day(dfw):.2f} kWh/day",
           help="Mean consumption between 01:00–04:30, scaled to a full day. The 'always on' draw.")
 
 st.plotly_chart(chart_daily(daily_w, freq), use_container_width=True)
+
+st.plotly_chart(chart_year_over_year(daily_w, freq), use_container_width=True)
 
 col_a, col_b = st.columns([1, 1])
 with col_a:
